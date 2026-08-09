@@ -45,3 +45,45 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  database:
+    name: Migrations, seed, and database tests
+    runs-on: ubuntu-latest
+
+    # Postgres with pgvector, matching the production stack (Supabase).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vibecoding
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/vibecoding
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations, seed, and validate schema
+        run: npm run db:setup
+
+      - name: Run tests (including database integration tests)
+        run: npm test

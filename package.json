@@ -17,10 +17,15 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "env:check": "tsx scripts/check-env.ts"
+    "env:check": "tsx scripts/check-env.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "db:validate": "tsx src/db/validate.ts",
+    "db:setup": "npm run db:migrate && npm run db:seed && npm run db:validate"
   },
   "dependencies": {
     "next": "~16.2.12",
+    "pg": "^8.23.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^3.25.0"
@@ -31,6 +36,7 @@
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.21.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^4.7.0",
