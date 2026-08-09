@@ -61,7 +61,17 @@ describe('migration files', () => {
     const sql = allSql();
     expect(sql).toContain('PRIMARY KEY (story_id, article_id)');
     expect(sql).toContain('UNIQUE (publication_id, story_id)');
-    expect(sql).toContain('UNIQUE (publication_id, story_id, locale)');
+  });
+
+  it('nests StoryLocalization under PublicationStory (one locale per parent)', () => {
+    const sql = allSql();
+    // Localisation belongs to a PublicationStory, not to a bare (pub, story) pair.
+    expect(sql).toMatch(
+      /publication_story_id\s+uuid NOT NULL\s+REFERENCES publication_stories \(id\) ON DELETE CASCADE/,
+    );
+    expect(sql).toContain('UNIQUE (publication_story_id, locale)');
+    // The old independent shape must be gone.
+    expect(sql).not.toContain('UNIQUE (publication_id, story_id, locale)');
   });
 
   it('uses partial unique indexes for nullable duplicate-prevention keys', () => {

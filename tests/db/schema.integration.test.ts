@@ -222,4 +222,148 @@ describe.skipIf(!hasDb)('database schema (integration)', () => {
       expect(count.rows[0]?.n).toBe('2');
     });
   });
+
+  describe('StoryLocalization belongs to PublicationStory', () => {
+    /**
+     * Create a Story, a Publication, and the PublicationStory that publishes the
+     * former under the latter. Returns the ids needed to attach localisations.
+     */
+    async function publishStory(
+      tx: Db,
+      tag: string,
+    ): Promise<{
+      storyId: string;
+      publicationId: string;
+      publicationStoryId: string;
+    }> {
+      const suffix = `${tag}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const story = await tx.query<{ id: string }>(
+        `INSERT INTO stories (slug, canonical_title)
+         VALUES ($1, $2) RETURNING id`,
+        [`story-${suffix}`, 'Canonical story'],
+      );
+      const pub = await tx.query<{ id: string }>(
+        `INSERT INTO publications (name, slug) VALUES ($1, $2) RETURNING id`,
+        [`Pub ${suffix}`, `pub-${suffix}`],
+      );
+      const storyId = story.rows[0]!.id;
+      const publicationId = pub.rows[0]!.id;
+      const ps = await tx.query<{ id: string }>(
+        `INSERT INTO publication_stories (publication_id, story_id, headline)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [publicationId, storyId, 'Headline'],
+      );
+      return { storyId, publicationId, publicationStoryId: ps.rows[0]!.id };
+    }
+
+    async function addLocalization(
+      tx: Db,
+      publicationStoryId: string,
+      locale: string,
+    ): Promise<void> {
+      await tx.query(
+        `INSERT INTO story_localizations (publication_story_id, locale, headline)
+         VALUES ($1, $2, $3)`,
+        [publicationStoryId, locale, `Headline ${locale}`],
+      );
+    }
+
+    it('rejects a localisation with no PublicationStory parent', async () => {
+      await inRollbackTx(async (tx) => {
+        // A random (non-existent) parent id violates the foreign key.
+        await expect(
+          tx.query(
+            `INSERT INTO story_localizations (publication_story_id, locale)
+             VALUES (gen_random_uuid(), 'en')`,
+          ),
+        ).rejects.toThrow();
+      });
+    });
+
+    it('allows multiple locales under one PublicationStory', async () => {
+      await inRollbackTx(async (tx) => {
+        const { publicationStoryId } = await publishStory(tx, 'multi-locale');
+        await addLocalization(tx, publicationStoryId, 'en');
+        await addLocalization(tx, publicationStoryId, 'ms');
+        const count = await tx.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM story_localizations
+           WHERE publication_story_id = $1`,
+          [publicationStoryId],
+        );
+        expect(count.rows[0]?.n).toBe('2');
+      });
+    });
+
+    it('rejects a duplicate locale for one PublicationStory', async () => {
+      await inRollbackTx(async (tx) => {
+        const { publicationStoryId } = await publishStory(tx, 'dup-locale');
+        await addLocalization(tx, publicationStoryId, 'en');
+        await expect(
+          addLocalization(tx, publicationStoryId, 'en'),
+        ).rejects.toThrow();
+      });
+    });
+
+    it('cascades: deleting a PublicationStory removes its localisations', async () => {
+      await inRollbackTx(async (tx) => {
+        const { publicationStoryId } = await publishStory(tx, 'cascade');
+        await addLocalization(tx, publicationStoryId, 'en');
+        await addLocalization(tx, publicationStoryId, 'ms');
+        await tx.query('DELETE FROM publication_stories WHERE id = $1', [
+          publicationStoryId,
+        ]);
+        const count = await tx.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM story_localizations
+           WHERE publication_story_id = $1`,
+          [publicationStoryId],
+        );
+        expect(count.rows[0]?.n).toBe('0');
+      });
+    });
+
+    it('lets multiple Publications independently publish and localise one Story', async () => {
+      await inRollbackTx(async (tx) => {
+        const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const story = await tx.query<{ id: string }>(
+          `INSERT INTO stories (slug, canonical_title)
+           VALUES ($1, $2) RETURNING id`,
+          [`shared-${suffix}`, 'Shared canonical story'],
+        );
+        const storyId = story.rows[0]!.id;
+
+        const mkPubStory = async (name: string): Promise<string> => {
+          const pub = await tx.query<{ id: string }>(
+            `INSERT INTO publications (name, slug) VALUES ($1, $2) RETURNING id`,
+            [name, `${name}-${suffix}`.toLowerCase().replace(/\s+/g, '-')],
+          );
+          const ps = await tx.query<{ id: string }>(
+            `INSERT INTO publication_stories (publication_id, story_id, headline)
+             VALUES ($1, $2, $3) RETURNING id`,
+            [pub.rows[0]!.id, storyId, name],
+          );
+          return ps.rows[0]!.id;
+        };
+
+        const psA = await mkPubStory('Global EN');
+        const psB = await mkPubStory('Bahasa MY');
+        // Both publish the SAME canonical Story, each with its own localisation.
+        await addLocalization(tx, psA, 'en');
+        await addLocalization(tx, psB, 'ms');
+
+        // Deleting one Publication's PublicationStory must not affect the other.
+        await tx.query('DELETE FROM publication_stories WHERE id = $1', [psA]);
+
+        const remaining = await tx.query<{ publication_story_id: string }>(
+          `SELECT l.publication_story_id
+           FROM story_localizations l
+           JOIN publication_stories ps ON ps.id = l.publication_story_id
+           WHERE ps.story_id = $1`,
+          [storyId],
+        );
+        expect(remaining.rows.map((r) => r.publication_story_id)).toEqual([
+          psB,
+        ]);
+      });
+    });
+  });
 });

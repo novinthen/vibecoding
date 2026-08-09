@@ -1,10 +1,12 @@
 -- Migration 0009 — Publication-specific publishing and localisation.
 --
 -- Canonical intelligence (Story/Article facts) is global; PUBLISHING is
--- publication-specific. PublicationStory controls whether and how a canonical
--- Story appears for one Publication; StoryLocalization stores language/editorial
--- variants. Neither table alters canonical Article/Story facts — they only carry
--- presentation. One Story may be published by many Publications.
+-- publication-specific. The hierarchy is Story → PublicationStory →
+-- StoryLocalization: PublicationStory controls whether and how a canonical Story
+-- appears for one Publication, and StoryLocalization stores the language/editorial
+-- variants of that published Story. Neither table alters canonical Article/Story
+-- facts — they only carry presentation. One Story may be published by many
+-- Publications.
 
 -- ---------------------------------------------------------------------------
 -- PublicationStory — per-Publication publishing control for a canonical Story.
@@ -44,34 +46,42 @@ CREATE TRIGGER publication_stories_set_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ---------------------------------------------------------------------------
--- StoryLocalization — language/localisation variants per Publication.
+-- StoryLocalization — language/localisation variants of a PUBLISHED Story.
+--
+-- Belongs to a PublicationStory, not independently to a Publication + Story.
+-- This enforces the publishing hierarchy Story → PublicationStory →
+-- StoryLocalization: a localisation can only exist once a Story has actually
+-- been selected/configured for a Publication. Referencing publication_story_id
+-- (rather than repeating publication_id + story_id) removes the transitive
+-- dependency, making it structurally impossible to localise a (publication,
+-- story) pair that was never published, or to disagree with the parent's pair.
 -- Languages are modelled as rows keyed by locale, never as title_en/title_ms
 -- columns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE story_localizations (
-  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  publication_id     uuid NOT NULL REFERENCES publications (id) ON DELETE CASCADE,
-  story_id           uuid NOT NULL REFERENCES stories (id) ON DELETE CASCADE,
-  locale             text NOT NULL,
-  headline           text,
-  summary            text,
-  why_it_matters     text,
-  translation_source text
-                       CHECK (translation_source IS NULL OR translation_source IN (
-                         'HUMAN', 'MACHINE', 'MACHINE_REVIEWED')),
-  model_provider     text,
-  model_name         text,
-  status             text NOT NULL DEFAULT 'DRAFT'
-                       CHECK (status IN ('DRAFT', 'REVIEW', 'PUBLISHED', 'ARCHIVED')),
-  reviewed_by        text,
-  created_at         timestamptz NOT NULL DEFAULT now(),
-  updated_at         timestamptz NOT NULL DEFAULT now(),
-  -- One localisation per (publication, story, locale).
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- CASCADE: unpublishing a Story for a Publication removes its localisations.
+  publication_story_id uuid NOT NULL
+                        REFERENCES publication_stories (id) ON DELETE CASCADE,
+  locale              text NOT NULL,
+  headline            text,
+  summary             text,
+  why_it_matters      text,
+  translation_source  text
+                        CHECK (translation_source IS NULL OR translation_source IN (
+                          'HUMAN', 'MACHINE', 'MACHINE_REVIEWED')),
+  model_provider      text,
+  model_name          text,
+  status              text NOT NULL DEFAULT 'DRAFT'
+                        CHECK (status IN ('DRAFT', 'REVIEW', 'PUBLISHED', 'ARCHIVED')),
+  reviewed_by         text,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  -- One localisation per (publication_story, locale). The leading column also
+  -- serves lookups/cascades by publication_story_id, so no separate index.
   CONSTRAINT story_localizations_pub_story_locale_key
-    UNIQUE (publication_id, story_id, locale)
+    UNIQUE (publication_story_id, locale)
 );
-
-CREATE INDEX story_localizations_story_id_idx ON story_localizations (story_id);
 
 CREATE TRIGGER story_localizations_set_updated_at
   BEFORE UPDATE ON story_localizations
