@@ -50,7 +50,7 @@ explicit instruction.
 
 ## Requirements
 
-- **Node.js 22** (see [`.nvmrc`](.nvmrc); Node 20+ is supported).
+- **Node.js 22** (see [`.nvmrc`](.nvmrc); Node 20.9+ is required by Next.js 16).
 - **npm** (the repository uses `package-lock.json`).
 
 ## Setup
