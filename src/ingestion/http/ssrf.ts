@@ -185,14 +185,101 @@ function isPrivateIpv4(ip: string): boolean {
   return false;
 }
 
+/**
+ * Classify an IPv6 literal. Rather than match textual prefixes (which are
+ * trivially bypassed by hex-normalized IPv4-mapped forms such as `::ffff:7f00:1`
+ * ≡ `::ffff:127.0.0.1`, by leading-zero expansion, or by `::` compression), the
+ * address is decoded to its eight 16-bit groups and classified numerically. Any
+ * IPv4-mapped or IPv4-embedded address is validated against the IPv4 private
+ * rules regardless of how it was written. An unparseable address is treated as
+ * unsafe.
+ */
 function isPrivateIpv6(ip: string): boolean {
-  const addr = ip.toLowerCase();
-  if (addr === '::' || addr === '::1') return true; // unspecified / loopback
-  // IPv4-mapped (::ffff:a.b.c.d) — validate the embedded v4 address.
-  const mapped = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped && mapped[1]) return isPrivateIpv4(mapped[1]);
-  if (addr.startsWith('fe80')) return true; // link-local
-  if (addr.startsWith('fc') || addr.startsWith('fd')) return true; // fc00::/7 unique-local
-  if (addr.startsWith('ff')) return true; // multicast
+  const groups = parseIpv6Groups(ip);
+  if (!groups) return true; // Unparseable → treat as unsafe.
+
+  const allZeroHigh = groups.slice(0, 5).every((g) => g === 0);
+
+  // ::ffff:a.b.c.d — IPv4-mapped. Validate the embedded IPv4 in any textual form.
+  if (allZeroHigh && groups[5] === 0xffff) {
+    return isPrivateIpv4(embeddedIpv4(groups));
+  }
+
+  // ::a.b.c.d — IPv4-compatible/embedded (incl. ::, ::1). The embedded IPv4
+  // rules already flag 0.0.0.0/8 (covers :: and ::1) and every private range.
+  if (allZeroHigh && groups[5] === 0) {
+    return isPrivateIpv4(embeddedIpv4(groups));
+  }
+
+  const first = groups[0] ?? 0;
+  if (first >= 0xfe80 && first <= 0xfebf) return true; // fe80::/10 link-local
+  if (first >= 0xfc00 && first <= 0xfdff) return true; // fc00::/7 unique-local
+  if ((first & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+
+  // 64:ff9b::/96 and 64:ff9b:1::/48 NAT64 — reserved; validate any embedded IPv4.
+  if (first === 0x64 && groups[1] === 0xff9b) return true;
+
   return false;
+}
+
+/** Reconstruct the IPv4 address embedded in the low 32 bits of an IPv6 group set. */
+function embeddedIpv4(groups: number[]): string {
+  const hi = groups[6] ?? 0;
+  const lo = groups[7] ?? 0;
+  return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.');
+}
+
+/**
+ * Expand an IPv6 literal into eight 16-bit groups, handling `::` compression,
+ * a dotted-quad IPv4 tail, leading zeros, and an optional zone id. Returns null
+ * when the input is not a well-formed IPv6 address.
+ */
+function parseIpv6Groups(ip: string): number[] | null {
+  // Drop any zone identifier (e.g. fe80::1%eth0).
+  let addr = ip.toLowerCase().split('%')[0] ?? '';
+
+  // Convert a trailing dotted-quad (IPv4 tail) into two hex groups.
+  const lastColon = addr.lastIndexOf(':');
+  const tail = lastColon >= 0 ? addr.slice(lastColon + 1) : addr;
+  if (tail.includes('.')) {
+    const octets = tail.split('.');
+    if (octets.length !== 4) return null;
+    const nums = octets.map((o) => Number(o));
+    if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const [a, b, c, d] = nums as [number, number, number, number];
+    const hex = `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    addr = addr.slice(0, lastColon + 1) + hex;
+  }
+
+  const doubleColonParts = addr.split('::');
+  if (doubleColonParts.length > 2) return null;
+
+  const parseSide = (side: string): number[] | null => {
+    if (side === '') return [];
+    const parts = side.split(':');
+    const out: number[] = [];
+    for (const part of parts) {
+      if (part.length === 0 || part.length > 4 || !/^[0-9a-f]+$/.test(part)) {
+        return null;
+      }
+      out.push(Number.parseInt(part, 16));
+    }
+    return out;
+  };
+
+  let groups: number[];
+  if (doubleColonParts.length === 2) {
+    const left = parseSide(doubleColonParts[0] ?? '');
+    const right = parseSide(doubleColonParts[1] ?? '');
+    if (!left || !right) return null;
+    const missing = 8 - (left.length + right.length);
+    if (missing < 1) return null; // `::` must stand in for at least one group.
+    groups = [...left, ...new Array<number>(missing).fill(0), ...right];
+  } else {
+    const only = parseSide(addr);
+    if (!only) return null;
+    groups = only;
+  }
+
+  return groups.length === 8 ? groups : null;
 }

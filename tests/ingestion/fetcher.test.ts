@@ -172,6 +172,31 @@ describe('fetchFeed — timeout', () => {
   });
 });
 
+describe('fetchFeed — body stalls after headers', () => {
+  it('aborts and classifies as TIMEOUT when the body never streams', async () => {
+    // Headers arrive (fetch resolves with 200) but the body stream never emits
+    // and never closes — the classic "slowloris" body stall.
+    const stalled = new ReadableStream<Uint8Array>({
+      start() {
+        /* never enqueue, never close */
+      },
+    });
+    const { fn } = fakeFetch([
+      new Response(stalled, {
+        status: 200,
+        headers: { 'content-type': 'application/xml' },
+      }),
+    ]);
+    await expect(
+      fetchFeed('https://example.com/feed', {
+        fetchImpl: fn,
+        resolve: publicResolve,
+        timeoutMs: 30,
+      }),
+    ).rejects.toMatchObject({ code: 'TIMEOUT', retryable: true });
+  });
+});
+
 describe('fetchFeed — size cap', () => {
   it('rejects a body larger than the cap', async () => {
     const big = 'a'.repeat(1000);

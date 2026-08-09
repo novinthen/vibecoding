@@ -10,7 +10,10 @@ import { assertPublicUrl, type HostResolver } from './ssrf';
  *
  * Feed endpoints are untrusted, so every fetch enforces defensive limits
  * (docs/ARCHITECTURE.md security boundaries):
- *  - a wall-clock timeout via AbortController;
+ *  - a wall-clock timeout that bounds the WHOLE operation — DNS/SSRF validation,
+ *    connection, every redirect hop, AND body streaming — not just the wait for
+ *    response headers. A server that sends headers and then stalls the body is
+ *    still aborted;
  *  - a bounded redirect chain, followed manually so each hop is re-validated;
  *  - SSRF protection on the initial URL and on every redirect target;
  *  - conditional requests (ETag / Last-Modified) to avoid re-downloading
@@ -29,7 +32,7 @@ export interface FeedFetchOptions {
   etag?: string | null;
   /** Stored Last-Modified to send as If-Modified-Since. */
   lastModified?: string | null;
-  /** Wall-clock timeout in milliseconds (default 10s). */
+  /** Wall-clock timeout in milliseconds for the whole operation (default 10s). */
   timeoutMs?: number;
   /** Maximum redirect hops to follow (default 5). */
   maxRedirects?: number;
@@ -67,9 +70,17 @@ const DEFAULT_USER_AGENT = 'VibeCodingNewsBot/0.1 (+ingestion)';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+/** An AbortError-shaped error so {@link toIngestError} classifies it as TIMEOUT. */
+function timeoutError(): Error {
+  const error = new Error('Operation timed out');
+  error.name = 'AbortError';
+  return error;
+}
+
 /**
  * Fetch a feed URL safely, following redirects with SSRF re-validation at each
- * hop and honouring conditional-request headers. Throws {@link IngestError}.
+ * hop and honouring conditional-request headers. A single timeout bounds the
+ * entire operation, including body streaming. Throws {@link IngestError}.
  */
 export async function fetchFeed(
   rawUrl: string,
@@ -90,47 +101,87 @@ export async function fetchFeed(
   if (options.etag) headers['if-none-match'] = options.etag;
   if (options.lastModified) headers['if-modified-since'] = options.lastModified;
 
-  let currentUrl = rawUrl;
-
-  for (let hop = 0; hop <= maxRedirects; hop += 1) {
-    // SSRF guard on every hop (initial + each redirect target).
-    const url = await assertPublicUrl(currentUrl, { resolve: options.resolve });
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
-    try {
-      response = await fetchImpl(url.toString(), {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers,
-      });
-    } catch (error) {
-      throw toIngestError(error);
-    } finally {
-      clearTimeout(timer);
+  // One controller + timer bounds the whole operation. The signal is passed to
+  // every fetch hop, and `aborted` lets awaited steps that fetch cannot cancel
+  // on its own (DNS resolution, body streaming from a fake stream) race the
+  // timeout too. `aborted` carries its own catch so a late abort after we have
+  // already returned never surfaces as an unhandled rejection.
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(timeoutError());
+      return;
     }
+    signal.addEventListener('abort', () => reject(timeoutError()), {
+      once: true,
+    });
+  });
+  aborted.catch(() => {});
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (REDIRECT_STATUSES.has(response.status)) {
-      const location = response.headers.get('location');
-      if (!location) {
-        throw new IngestError(
-          'NETWORK',
-          `Redirect (${response.status}) without Location header`,
-          { retryable: false, httpStatus: response.status },
-        );
+  try {
+    let currentUrl = rawUrl;
+
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      // SSRF guard on every hop (initial + each redirect target). Raced against
+      // the timeout because DNS resolution cannot be aborted by the signal.
+      const url = await Promise.race([
+        assertPublicUrl(currentUrl, { resolve: options.resolve }),
+        aborted,
+      ]);
+
+      let response: Response;
+      try {
+        response = await fetchImpl(url.toString(), {
+          method: 'GET',
+          redirect: 'manual',
+          signal,
+          headers,
+        });
+      } catch (error) {
+        throw toIngestError(error);
       }
-      // Resolve relative redirects against the current URL.
-      currentUrl = new URL(location, url).toString();
-      continue;
-    }
 
-    if (response.status === 304) {
+      if (REDIRECT_STATUSES.has(response.status)) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new IngestError(
+            'NETWORK',
+            `Redirect (${response.status}) without Location header`,
+            { retryable: false, httpStatus: response.status },
+          );
+        }
+        // Drain/close the redirect response body before the next hop.
+        await response.body?.cancel().catch(() => {});
+        // Resolve relative redirects against the current URL.
+        currentUrl = new URL(location, url).toString();
+        continue;
+      }
+
+      if (response.status === 304) {
+        await response.body?.cancel().catch(() => {});
+        return {
+          status: 304,
+          notModified: true,
+          body: null,
+          etag: response.headers.get('etag'),
+          lastModified: response.headers.get('last-modified'),
+          contentType: response.headers.get('content-type'),
+          finalUrl: url.toString(),
+        };
+      }
+
+      if (response.status >= 400) {
+        await response.body?.cancel().catch(() => {});
+        throw ingestErrorFromHttpStatus(response.status);
+      }
+
+      const body = await readCapped(response, maxBytes, aborted);
       return {
-        status: 304,
-        notModified: true,
-        body: null,
+        status: response.status,
+        notModified: false,
+        body,
         etag: response.headers.get('etag'),
         lastModified: response.headers.get('last-modified'),
         contentType: response.headers.get('content-type'),
@@ -138,37 +189,27 @@ export async function fetchFeed(
       };
     }
 
-    if (response.status >= 400) {
-      throw ingestErrorFromHttpStatus(response.status);
-    }
-
-    const body = await readCapped(response, maxBytes);
-    return {
-      status: response.status,
-      notModified: false,
-      body,
-      etag: response.headers.get('etag'),
-      lastModified: response.headers.get('last-modified'),
-      contentType: response.headers.get('content-type'),
-      finalUrl: url.toString(),
-    };
+    throw new IngestError(
+      'TOO_MANY_REDIRECTS',
+      `Exceeded ${maxRedirects} redirects`,
+      { retryable: false },
+    );
+  } finally {
+    clearTimeout(timer);
   }
-
-  throw new IngestError(
-    'TOO_MANY_REDIRECTS',
-    `Exceeded ${maxRedirects} redirects`,
-    { retryable: false },
-  );
 }
 
 /**
- * Read a response body as UTF-8 text, enforcing a hard byte cap. Rejects early
- * on an oversized Content-Length, then streams and aborts if the actual body
- * exceeds the cap.
+ * Read a response body as UTF-8 text, enforcing a hard byte cap AND the caller's
+ * timeout. Rejects early on an oversized Content-Length, then streams — racing
+ * each chunk read against `aborted` so a body that stalls mid-stream is aborted
+ * rather than hanging. The reader is always cancelled/released on every exit
+ * path so no stream or lock leaks.
  */
 async function readCapped(
   response: Response,
   maxBytes: number,
+  aborted: Promise<never>,
 ): Promise<string> {
   const declared = response.headers.get('content-length');
   if (
@@ -176,17 +217,16 @@ async function readCapped(
     Number.isFinite(Number(declared)) &&
     Number(declared) > maxBytes
   ) {
+    await response.body?.cancel().catch(() => {});
     throw new IngestError(
       'RESPONSE_TOO_LARGE',
       'Declared body exceeds size cap',
-      {
-        retryable: false,
-      },
+      { retryable: false },
     );
   }
 
   if (!response.body) {
-    const text = await response.text();
+    const text = await Promise.race([response.text(), aborted]);
     if (Buffer.byteLength(text, 'utf8') > maxBytes) {
       throw new IngestError('RESPONSE_TOO_LARGE', 'Body exceeds size cap', {
         retryable: false,
@@ -200,12 +240,12 @@ async function readCapped(
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      // Race the read against the timeout: a stalled body loses to `aborted`.
+      const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
       if (value) {
         total += value.byteLength;
         if (total > maxBytes) {
-          await reader.cancel();
           throw new IngestError('RESPONSE_TOO_LARGE', 'Body exceeds size cap', {
             retryable: false,
           });
@@ -213,9 +253,12 @@ async function readCapped(
         chunks.push(Buffer.from(value));
       }
     }
+    return Buffer.concat(chunks).toString('utf8');
   } catch (error) {
     if (error instanceof IngestError) throw error;
     throw toIngestError(error);
+  } finally {
+    // Always cancel; safe whether the read completed, threw, or was aborted.
+    await reader.cancel().catch(() => {});
   }
-  return Buffer.concat(chunks).toString('utf8');
 }

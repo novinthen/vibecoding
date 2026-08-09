@@ -60,7 +60,7 @@ describe('canonicalizeUrl', () => {
 
   it('produces a stable key regardless of tracking-noise ordering', () => {
     const a = canonicalizeUrl(
-      'https://example.com/x?id=5&utm_campaign=a&ref=hn',
+      'https://example.com/x?id=5&utm_campaign=a&gclid=q',
     );
     const b = canonicalizeUrl(
       'https://example.com/x?utm_campaign=b&id=5&fbclid=zzz',
@@ -69,11 +69,42 @@ describe('canonicalizeUrl', () => {
     expect(a).toBe('https://example.com/x?id=5');
   });
 
-  it('keeps an unknown parameter even when it looks disposable', () => {
-    // `unknown_param` is not on the tracking list, so it must be preserved.
-    expect(canonicalizeUrl('https://example.com/x?unknown_param=1')).toBe(
-      'https://example.com/x?unknown_param=1',
+  it('removes known analytics/ad/email tracking parameters', () => {
+    expect(
+      canonicalizeUrl(
+        'https://example.com/p?utm_campaign=c&gclid=1&fbclid=2&msclkid=3&mc_eid=4&mkt_tok=5&pk_campaign=6',
+      ),
+    ).toBe('https://example.com/p');
+  });
+
+  it('preserves generic/ambiguous parameters (conservative: no false merges)', () => {
+    // ref / ref_src / ref_url / referrer / source are site-specific: they may
+    // be tracking OR select the resource. Preserve them so two distinct
+    // resources are never collapsed.
+    for (const param of [
+      'ref=hn',
+      'ref_src=twsrc',
+      'ref_url=https%3A%2F%2Fx.example',
+      'referrer=abc',
+      'source=newsletter',
+      'campaign_id=42',
+      'unknown_param=1',
+    ]) {
+      const url = `https://example.com/x?${param}`;
+      expect(canonicalizeUrl(url)).toBe(url);
+    }
+  });
+
+  it('keeps URLs distinct when they differ by a meaningful query parameter', () => {
+    const one = canonicalizeUrl('https://example.com/x?id=5&ref=hn');
+    const two = canonicalizeUrl('https://example.com/x?id=6&ref=hn');
+    expect(one).not.toBe(two);
+    // Stripping only the tracking noise must not merge these either.
+    const withNoise = canonicalizeUrl(
+      'https://example.com/x?id=5&ref=hn&utm_source=z',
     );
+    expect(withNoise).toBe(one);
+    expect(withNoise).not.toBe(two);
   });
 
   it('throws on unsupported schemes', () => {
@@ -103,9 +134,20 @@ describe('isTrackingParam', () => {
     expect(isTrackingParam('gclid')).toBe(true);
   });
 
-  it('does not match ordinary parameters', () => {
-    expect(isTrackingParam('id')).toBe(false);
-    expect(isTrackingParam('page')).toBe(false);
-    expect(isTrackingParam('q')).toBe(false);
+  it('does not match ordinary or generic parameters', () => {
+    for (const name of [
+      'id',
+      'page',
+      'q',
+      'ref',
+      'ref_src',
+      'ref_url',
+      'referrer',
+      'source',
+      'campaign_id',
+      'cmpid',
+    ]) {
+      expect(isTrackingParam(name)).toBe(false);
+    }
   });
 });

@@ -21,24 +21,22 @@
  */
 
 /**
- * Exact query-parameter names that are pure tracking/analytics and never affect
- * which resource is returned. Compared case-insensitively.
+ * Exact query-parameter names that are UNAMBIGUOUSLY analytics / ad-click /
+ * email-campaign tracking and never affect which resource is returned. Compared
+ * case-insensitively.
+ *
+ * This list is deliberately conservative. Our invariant is that a false
+ * duplicate MISS (two URLs that were really the same treated as distinct) is
+ * safer than a false MERGE (two distinct resources collapsed into one). So
+ * generic parameters whose meaning is site-specific — `ref`, `ref_src`,
+ * `ref_url`, `referrer`, `source`, `campaign_id`, `cmpid`, `spm`, … — are NOT
+ * stripped: on some sites they are tracking, on others they select the resource.
+ * Only add a name here when it is a well-known vendor tracking token with no
+ * resource-selecting meaning anywhere.
  */
 const TRACKING_PARAM_NAMES = new Set(
   [
-    // Google / Urchin analytics
-    'utm_source',
-    'utm_medium',
-    'utm_campaign',
-    'utm_term',
-    'utm_content',
-    'utm_id',
-    'utm_name',
-    'utm_reader',
-    'utm_referrer',
-    'utm_social',
-    'utm_brand',
-    // Click identifiers
+    // Ad-click identifiers (Google, Meta, Microsoft, Yandex, Twitter, TikTok, IG)
     'gclid',
     'gclsrc',
     'dclid',
@@ -51,32 +49,21 @@ const TRACKING_PARAM_NAMES = new Set(
     'ttclid',
     'igshid',
     'igsh',
-    // Mailchimp / email
+    // Email-campaign identifiers (Mailchimp, Marketo, HubSpot, Vero, Omeda)
     'mc_cid',
     'mc_eid',
-    // Vendor referrers / sharing noise
-    'ref',
-    'ref_src',
-    'ref_url',
-    'referrer',
-    'source',
-    'cmpid',
-    'campaign_id',
-    'spm',
-    'scm',
+    'mkt_tok',
     '_hsenc',
     '_hsmi',
+    'hsa_cam',
     'vero_id',
     'vero_conv',
     'oly_anon_id',
     'oly_enc_id',
-    'hsa_cam',
+    // Matomo/Piwik analytics campaign tokens
     'piwik_campaign',
     'pk_campaign',
     'pk_kwd',
-    'guccounter',
-    // Feed-reader cache-busting
-    'utm_cid',
   ].map((name) => name.toLowerCase()),
 );
 
