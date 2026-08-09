@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example Company Blog</title>
+    <link>https://example.com/blog</link>
+    <description>Official announcements</description>
+    <language>en-us</language>
+    <item>
+      <title>We shipped a new coding agent</title>
+      <link>https://example.com/blog/new-agent?utm_source=rss&amp;utm_medium=feed</link>
+      <guid isPermaLink="false">example-guid-0001</guid>
+      <description><![CDATA[<p>Our new <b>agent</b> can write code.</p>]]></description>
+      <dc:creator>Ada Lovelace</dc:creator>
+      <pubDate>Wed, 06 Aug 2025 10:00:00 GMT</pubDate>
+      <enclosure url="https://cdn.example.com/img/agent.png" type="image/png" length="12345" />
+      <content:encoded><![CDATA[<p>Full content here.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>MCP support is now generally available</title>
+      <link>https://example.com/blog/mcp-ga</link>
+      <guid isPermaLink="false">example-guid-0002</guid>
+      <description>Short summary of MCP GA.</description>
+      <pubDate>Thu, 07 Aug 2025 12:30:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

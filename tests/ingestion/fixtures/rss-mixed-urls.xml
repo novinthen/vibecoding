@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Mixed URL Feed</title>
+    <link>https://mixed.example.com/</link>
+    <description>Some items have unusable links</description>
+    <item>
+      <title>Good item</title>
+      <link>https://mixed.example.com/good</link>
+      <guid isPermaLink="false">mixed-good</guid>
+      <pubDate>Fri, 08 Aug 2025 08:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Bad scheme item</title>
+      <link>javascript:alert(1)</link>
+      <guid isPermaLink="false">mixed-bad</guid>
+      <pubDate>Fri, 08 Aug 2025 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

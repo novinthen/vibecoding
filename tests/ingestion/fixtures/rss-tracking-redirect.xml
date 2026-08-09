@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Publication With Tracking Links</title>
+    <link>https://news.example.net/</link>
+    <description>Tech reporting</description>
+    <item>
+      <title>Funding round announced</title>
+      <link>https://news.example.net/story/funding?utm_source=twitter&amp;utm_campaign=launch&amp;fbclid=abc123&amp;id=42&amp;ref=hn</link>
+      <guid>https://news.example.net/story/funding</guid>
+      <description>A startup raised a round.</description>
+      <pubDate>Fri, 08 Aug 2025 08:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Acquisition closes</title>
+      <link>https://news.example.net/story/acquisition/?gclid=xyz&amp;page=2</link>
+      <guid>https://news.example.net/story/acquisition</guid>
+      <description>Deal done.</description>
+      <pubDate>Fri, 08 Aug 2025 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
