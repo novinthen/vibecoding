@@ -49,7 +49,7 @@ References:
 
 ## Stage 2 — Foundation & Data Layer
 
-**Status:** CURRENT
+**Status:** COMPLETE
 
 Goal:
 
@@ -78,6 +78,8 @@ See: `CURRENT_STAGE.md`
 ---
 
 ## Stage 3 — News Ingestion Engine
+
+**Status:** CURRENT
 
 Goal:
 

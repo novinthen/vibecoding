@@ -21,9 +21,11 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
     "db:validate": "tsx src/db/validate.ts",
-    "db:setup": "npm run db:migrate && npm run db:seed && npm run db:validate"
+    "db:setup": "npm run db:migrate && npm run db:seed && npm run db:validate",
+    "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.10.1",
     "next": "~16.2.12",
     "pg": "^8.23.0",
     "react": "^19.2.0",

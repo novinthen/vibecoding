@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <title>Dev Weblog</title>
+  <link href="https://dev.example.org/" rel="alternate" />
+  <link href="https://dev.example.org/atom" rel="self" />
+  <updated>2025-08-07T12:00:00Z</updated>
+  <id>tag:dev.example.org,2025:/atom</id>
+  <entry>
+    <title type="html">Understanding vibe coding workflows</title>
+    <link href="https://dev.example.org/posts/vibe-coding" rel="alternate" type="text/html" />
+    <link href="https://cdn.example.org/cover.jpg" rel="enclosure" type="image/jpeg" />
+    <id>tag:dev.example.org,2025:/posts/vibe-coding</id>
+    <published>2025-08-05T09:00:00Z</published>
+    <updated>2025-08-06T09:00:00Z</updated>
+    <summary>A practical look at vibe coding workflows.</summary>
+    <author>
+      <name>Grace Hopper</name>
+    </author>
+  </entry>
+  <entry>
+    <title>Model release notes</title>
+    <link href="https://dev.example.org/posts/model-notes" />
+    <id>tag:dev.example.org,2025:/posts/model-notes</id>
+    <updated>2025-08-07T11:00:00Z</updated>
+    <content type="html">&lt;p&gt;Release &lt;i&gt;notes&lt;/i&gt;.&lt;/p&gt;</content>
+  </entry>
+</feed>

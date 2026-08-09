@@ -3,6 +3,7 @@ import type {
   AuthorityTier,
   EntityType,
   HealthStatus,
+  SourceFetchStatus,
   SourceType,
   StoryStatus,
 } from './enums';
@@ -42,8 +43,28 @@ export interface SourceRow {
   last_success_at: string | null;
   failure_count: number;
   health_status: HealthStatus;
+  etag: string | null;
+  last_modified: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** One audited fetch attempt against a Source. */
+export interface SourceFetchRow {
+  id: string;
+  source_id: string;
+  started_at: string;
+  completed_at: string | null;
+  status: SourceFetchStatus;
+  http_status: number | null;
+  items_found: number | null;
+  items_new: number | null;
+  items_updated: number | null;
+  duration_ms: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface ArticleRow {

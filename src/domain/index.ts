@@ -12,7 +12,12 @@ export { TopicRepository } from './repositories/topic-repository';
 export {
   SourceRepository,
   type CreateSourceInput,
+  type UpdateFetchStateInput,
 } from './repositories/source-repository';
+export {
+  SourceFetchRepository,
+  type CompleteFetchInput,
+} from './repositories/source-fetch-repository';
 export {
   ArticleRepository,
   type CreateArticleInput,

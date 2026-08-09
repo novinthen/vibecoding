@@ -1,6 +1,6 @@
 # Current Stage
 
-# Stage 2 — Foundation & Data Layer
+# Stage 3 — News Ingestion Engine
 
 ## Status
 
@@ -8,299 +8,111 @@
 
 This file defines the only implementation scope currently approved.
 
-Do not begin Stage 3.
+Stage 2 (Foundation & Data Layer) is complete. Do not begin Stage 4 or any later
+stage (Admin/Editorial, Public Portal, AI, Clustering, Ranking, GitHub or Hacker
+News ingestion).
 
 ---
 
 # Goal
 
-Create a clean, reproducible, tested foundation for the Vibe Coding News Portal so Stage 3 can implement real news ingestion without redesigning the repository or canonical data model.
+Build the first reliable news-ingestion pipeline on top of the Stage 2 canonical
+data model. The target flow is:
+
+```text
+Source
+  → fetch
+  → parse
+  → normalize
+  → canonicalize URL
+  → exact deduplication
+  → Article persistence
+  → SourceFetch audit
+  → Source health state
+```
+
+Ingestion creates/updates **Articles**, never Stories.
 
 ---
 
 # Implement
 
-## 1. Application Foundation
+1. Source Adapter contract (`validate / fetch / normalize / healthCheck` seam).
+2. RSS and Atom support first (one adapter over RSS 2.0, RSS 1.0/RDF, Atom 1.0).
+3. Safe HTTP fetching:
+   - timeout;
+   - redirect limit (manual, re-validated per hop);
+   - conditional requests (ETag / Last-Modified);
+   - source-aware rate-control seam;
+   - retryable vs non-retryable error classification;
+   - SSRF protections.
+4. Normalize feed items into one canonical ingestion shape.
+5. URL canonicalization (safe host/scheme/path normalization, tracking-parameter
+   removal, preservation of unknown parameters).
+6. Exact duplicate prevention using existing Article constraints and
+   deterministic keys/hashes.
+7. Persist Articles through the existing data-access layer.
+8. Record every fetch attempt in SourceFetch.
+9. Derive/update Source health from fetch results.
+10. Manual/CLI ingestion entry point for testing specific Sources.
+11. Extend CI/tests.
 
-Set up or normalize the repository around:
+## Representative-source rule
 
-- Next.js App Router;
-- React;
-- TypeScript strict mode;
-- Tailwind CSS;
-- sensible project structure.
-
-Do not build the final public homepage.
-
-## 2. Development Quality
-
-Configure:
-
-- formatting;
-- linting;
-- typechecking;
-- unit/integration test foundation;
-- production build scripts.
-
-Prefer a small number of mature dependencies.
-
-## 3. Environment
-
-Support:
-
-- local;
-- preview;
-- production.
-
-Create safe environment validation and an example environment file.
-
-Never commit secrets.
-
-## 4. PostgreSQL / Supabase Foundation
-
-Establish:
-
-- database connectivity;
-- migration workflow;
-- reproducible local/development setup;
-- seed workflow.
-
-Enable pgvector only if doing so cleanly supports the approved future schema.
-
-Do not generate embeddings.
-
-## 5. Canonical Data Model
-
-Implement the models described in `DATA_MODEL.md`.
-
-Required core structures:
-
-- Publication
-- PublicationDomain
-- PublicationStory
-- StoryLocalization
-- Source
-- SourceFetch
-- Article
-- Story
-- StoryArticle
-- Entity
-- EntityAlias
-- ArticleEntity
-- StoryEntity
-- Topic
-- ArticleEnrichment
-- AdminAuditLog
-
-Embedding tables may be created if appropriate for the chosen migration design, but no embedding generation is allowed.
-
-## 6. Controlled Taxonomy
-
-Seed these Topics:
-
-- News
-- Releases
-- Tools
-- Coding Agents
-- Models
-- MCP
-- Open Source
-- Developer Infrastructure
-- Tutorials
-- Research
-- Business
-- Community
-
-## 7. Data-Access Boundary
-
-Create a clear, lightweight data-access/repository pattern.
-
-At minimum the design should support:
-
-- Source access;
-- Article access;
-- Story access;
-- Entity access;
-- Topic access.
-
-Do not create an elaborate enterprise framework.
-
-## 8. CI
-
-Pull-request validation should run equivalents of:
-
-```text
-install
-typecheck
-lint
-tests
-production build
-```
-
-Do not disable failures to make CI green.
-
-## 9. Documentation
-
-Update the README with:
-
-- project purpose;
-- requirements;
-- setup;
-- environment;
-- database initialization;
-- migrations;
-- seed;
-- tests;
-- build;
-- current stage.
-
-Another coding agent should be able to clone the repository and reproduce the development setup.
+Prove the architecture on a small representative set (different feed behaviours)
+before expanding. Tricky behaviours (redirect/tracking URLs, malformed/failing
+feeds) are proven with stored fixtures in the test suite; live registry feeds are
+validated only via an opt-in smoke suite (`INGEST_LIVE_SMOKE=1`). Do not expand
+the registry broadly yet.
 
 ---
 
 # Do Not Implement
 
-Stage 2 explicitly excludes:
-
-- multi-domain public rendering;
-- publication branding UI;
-- translation/localisation workflows;
-- publication-specific SEO implementation;
-- RSS fetching;
-- Atom fetching;
-- Hacker News ingestion;
-- GitHub ingestion;
-- RSSHub ingestion;
-- source scheduling;
-- feed parsing;
-- URL canonicalization logic beyond schema requirements;
-- article ingestion workflows;
-- AI calls;
-- summaries;
-- Entity extraction;
-- embeddings generation;
-- Story clustering;
-- ranking;
-- Trending logic;
-- GitHub trend analysis;
-- newsletters;
-- comments;
-- public user accounts;
-- personalization;
-- alerts;
-- payments;
-- production homepage design;
-- native/mobile apps.
-
-Architectural seams are allowed. Future functionality is not.
+- GitHub ingestion; Hacker News ingestion; RSSHub-specific adapters; arbitrary
+  scraping; browser automation;
+- AI, summaries, Entity extraction, embeddings, Story clustering, ranking/trending,
+  translation/localisation;
+- public portal redesign; admin UI beyond minimal operational seams;
+- scheduled production polling (unless needed to prove the architecture);
+- Redis, Kafka, RabbitMQ, Elasticsearch, a crawler service, or microservices.
 
 ---
 
-# Required Architecture Checks
+# Important Invariants
 
-Before considering Stage 2 complete, verify:
-
-1. Article and Story are separate.
-2. Canonical intelligence is separated from Publication-specific presentation.
-3. One canonical Story may be published by multiple Publications.
-4. One Story can contain multiple Articles.
-5. One Article can reference multiple Entities.
-6. AI-derived data is separate from source facts.
-7. Source fetch history can be audited.
-8. Source authority and Source health are representable.
-9. Topics are controlled.
-10. future Story clustering is supported by relationships.
-11. no canonical logic assumes a single domain, brand, or locale.
-12. database changes are reproducible through migrations.
-13. the application can function later even if AI is unavailable.
-
----
-
-# Required Validation
-
-Before completion run all applicable checks:
-
-- install validation;
-- typecheck;
-- lint;
-- tests;
-- production build;
-- migration validation;
-- seed validation.
-
-Review your own Git diff after tests.
-
-Look for:
-
-- schema drift;
-- unnecessary dependencies;
-- unused files;
-- naming inconsistency;
-- unsafe cascading deletes;
-- missing constraints;
-- missing indexes;
-- TypeScript escapes;
-- leaked environment values;
-- scope creep.
-
-Correct issues before reporting completion.
+- Article ≠ Story; ingestion creates/updates Articles only.
+- Source facts remain untouched by AI-derived data.
+- One ingestion run is idempotent; fetching the same item twice creates no
+  duplicate Article.
+- External feeds/URLs/HTML are untrusted input.
+- A broken Source never silently disappears; failures are observable through
+  SourceFetch and Source health.
+- One slow/failing Source must not corrupt other Sources.
+- Canonical intelligence remains publication-independent.
 
 ---
 
 # Exit Criteria
 
-Stage 2 is complete only when:
+Stage 3 is complete only when:
 
-## Foundation
+- the Source Adapter contract exists and RSS/Atom parse into one canonical shape;
+- fetching is timeout-, redirect-, size-, and SSRF-bounded, issues conditional
+  requests, and classifies retryable vs non-retryable errors;
+- URL canonicalization strips tracking parameters and preserves meaningful ones;
+- exact deduplication prevents duplicate Articles and re-ingestion is idempotent;
+- every fetch attempt is recorded in SourceFetch and Source health transitions
+  deterministically;
+- a CLI ingestion entry point can register and ingest specific Sources;
+- deterministic fixture tests, DB integration tests, typecheck, lint, format
+  check, the full test suite, and the production build all pass.
 
-- application starts locally;
-- production build succeeds;
-- strict TypeScript passes;
-- lint passes;
-- tests pass.
-
-## Database
-
-- migrations reproduce the schema;
-- database connection works;
-- seed works;
-- required constraints and important indexes exist.
-
-## Domain
-
-Required canonical models and relationships exist.
-
-## Architecture
-
-- Article and Story remain distinct;
-- source facts and derived data remain distinct;
-- data access is not scattered through UI components;
-- future source adapters can be added without redesigning the canonical model;
-- future Publications, domains, and locales can be added without duplicating the ingestion/intelligence data model.
-
-## Operations
-
-- secrets are not committed;
-- CI exists;
-- setup is documented;
-- another developer or coding agent can reproduce the environment.
+Live representative-source validation may follow once the above passes; keep any
+live smoke tests out of normal CI.
 
 ---
 
-# Completion Report
-
-When all exit criteria pass, report:
-
-1. what was implemented;
-2. major database tables and relationships;
-3. tests and validation results;
-4. architectural deviations, if any;
-5. unresolved risks/issues;
-6. whether every Stage 2 exit criterion passed;
-7. whether the repository is ready for Stage 3.
-
-Then stop.
-
 # HARD STOP
 
-Do not begin Stage 3 without explicit approval.
+Do not begin Stage 4 or later without explicit approval.

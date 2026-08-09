@@ -18,18 +18,36 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 2B — Database Foundation.**
+**Stage 3 — News Ingestion Engine.**
 
-This repository contains the reproducible, tested application foundation
-(Stage 2A) plus the canonical, multi-publication-aware PostgreSQL/Supabase data
-model, migrations, seed, and data-access layer (Stage 2B). The following are
-**intentionally not implemented yet** and must not be added without moving to the
-appropriate roadmap stage:
+On top of the Stage 2 foundation (application + canonical PostgreSQL/Supabase
+data model), this repository now contains the first reliable news-ingestion
+pipeline:
 
-- ingestion (RSS, Atom, GitHub, Hacker News, RSSHub, feeds)
+```text
+Source → fetch → parse → normalize → canonicalize URL
+       → exact deduplication → Article persistence → SourceFetch audit
+       → Source health
+```
+
+It ships a Source Adapter contract; an RSS/Atom adapter (RSS 2.0, RSS 1.0/RDF,
+Atom 1.0); a safe HTTP fetcher (timeout, bounded redirects, conditional
+ETag/Last-Modified requests, response-size cap, SSRF protection, retryable-error
+classification); deterministic URL canonicalization with tracking-parameter
+removal; exact deduplication via canonical-URL hashing and the existing Article
+unique constraints; SourceFetch audit records; deterministic Source-health
+transitions; and a CLI ingestion entry point (`npm run ingest`). Ingestion
+creates/updates **Articles only** — never Stories. See
+[`src/ingestion`](src/ingestion).
+
+The following remain **intentionally not implemented yet** and must not be added
+without moving to the appropriate roadmap stage:
+
+- GitHub / Hacker News / RSSHub-specific ingestion; arbitrary scraping
 - AI enrichment, summaries, entity extraction, embeddings **generation**
 - Story clustering, ranking, trending
 - the public product UI and multi-publication rendering
+- scheduled production polling
 
 The home route (`/`) is a **foundation placeholder**, not the product homepage.
 Public page rendering does **not** depend on the database or any live AI call.
@@ -165,6 +183,36 @@ generated in this stage**.
 | `npm run db:seed`      | Seed controlled reference data           |
 | `npm run db:validate`  | Validate database connectivity + schema  |
 | `npm run db:setup`     | Migrate, seed, and validate in one step  |
+| `npm run ingest`       | Manual/CLI ingestion (see below)         |
+
+## Ingestion
+
+The Stage 3 ingestion engine turns a Source into deduplicated Articles with a
+full audit trail. Run it against specific Sources with the CLI (requires
+`DATABASE_URL`):
+
+```bash
+npm run ingest -- --register           # upsert the representative Source registry
+npm run ingest -- --list               # list configured Sources and their health
+npm run ingest -- --source <slug>      # ingest one Source by slug
+npm run ingest -- --all                # ingest every enabled Source
+```
+
+The pipeline (`src/ingestion`) fetches safely (timeout, bounded redirects,
+conditional requests, response-size cap, SSRF protection), parses RSS/Atom into
+one canonical item shape, canonicalizes and hashes item URLs for exact
+deduplication, persists Articles through the repository layer, records every
+attempt in `source_fetches`, and updates each Source's health. External feeds are
+treated as untrusted input throughout.
+
+Feed-behaviour edge cases (redirect/tracking URLs, malformed feeds, timeouts,
+SSRF) are covered by stored fixtures in `tests/ingestion`. Optional live
+validation of the representative registry feeds is opt-in and kept out of normal
+CI:
+
+```bash
+INGEST_LIVE_SMOKE=1 npx vitest run tests/ingestion/live-smoke.test.ts
+```
 
 ## Testing
 
@@ -210,17 +258,23 @@ src/
     migrations/  Ordered .sql migration files (source of truth for the schema)
   domain/        Controlled vocabularies, row types, and repositories
     repositories/  Data-access boundary (Source/Article/Story/Entity/Topic)
-scripts/         Standalone maintenance scripts (e.g. env validation)
-tests/           Vitest test suites (domain, db, config, app)
+  ingestion/     Stage 3 ingestion engine
+    adapters/    Source Adapter contract + RSS/Atom adapter
+    http/        Safe fetcher, SSRF guard, error classification
+    normalize/   URL canonicalization, hashing, item normalization
+    health.ts    Deterministic Source-health derivation
+    ingest.ts    Pipeline orchestrator
+    registry.ts  Representative Source registry
+scripts/         Standalone maintenance scripts (env validation, ingestion CLI)
+tests/           Vitest test suites (domain, db, config, app, ingestion)
 docs/            Product, architecture, data-model, and roadmap docs
 .github/         CI workflows
 ```
 
-The remaining architectural seams (`ingestion/`, `ai/`, `inngest/`,
-`components/`) are defined in
-[`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) and will be introduced **when the
-corresponding roadmap stage requires them**. Following the project rule, empty
-folders are not created merely to imitate the target architecture.
+The remaining architectural seams (`ai/`, `inngest/`, `components/`) are defined
+in [`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) and will be introduced **when
+the corresponding roadmap stage requires them**. Following the project rule,
+empty folders are not created merely to imitate the target architecture.
 
 ## Contributing rules
 
