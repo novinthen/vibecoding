@@ -65,7 +65,7 @@ Controls whether and how a canonical Story is published by one Publication. Reco
 
 ## StoryLocalization
 
-Stores language/localisation variants. Recommended fields: `id`, `publication_id`, `story_id`, `locale`, `headline`, `summary`, `why_it_matters`, `translation_source`, `model_provider`, `model_name`, `status`, `reviewed_by`, `created_at`, `updated_at`. Do not model languages as `title_en`, `title_ms`, etc.
+Stores language/localisation variants of a **published** Story. A localisation belongs to a `PublicationStory` (the publishing hierarchy is Story → PublicationStory → StoryLocalization): a Story must first be selected/configured for a Publication before publication-specific localisation can exist. It therefore references `publication_story_id` rather than repeating `publication_id` + `story_id`, which removes a transitive dependency and makes an orphan (or parent-mismatched) localisation structurally impossible. Recommended fields: `id`, `publication_story_id`, `locale`, `headline`, `summary`, `why_it_matters`, `translation_source`, `model_provider`, `model_name`, `status`, `reviewed_by`, `created_at`, `updated_at`. Enforce one localisation per (`publication_story_id`, `locale`) and cascade deletes from `PublicationStory`. Do not model languages as `title_en`, `title_ms`, etc.
 
 ---
 
@@ -518,7 +518,7 @@ Consider indexes for:
 - Publication.slug
 - PublicationDomain.domain
 - PublicationStory publication_id + story_id
-- StoryLocalization publication_id + story_id + locale
+- StoryLocalization publication_story_id + locale
 - Source.slug
 - Source enabled/health
 - Article canonical URL/hash

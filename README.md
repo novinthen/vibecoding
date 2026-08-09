@@ -18,19 +18,21 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 2A — Project Foundation.**
+**Stage 2B — Database Foundation.**
 
-This repository currently contains only the reproducible, tested application
-foundation. The following are **intentionally not implemented yet** and must not
-be added without moving to the appropriate roadmap stage:
+This repository contains the reproducible, tested application foundation
+(Stage 2A) plus the canonical, multi-publication-aware PostgreSQL/Supabase data
+model, migrations, seed, and data-access layer (Stage 2B). The following are
+**intentionally not implemented yet** and must not be added without moving to the
+appropriate roadmap stage:
 
-- database schema / migrations / seed
 - ingestion (RSS, Atom, GitHub, Hacker News, RSSHub, feeds)
-- AI enrichment, summaries, entity extraction, embeddings
+- AI enrichment, summaries, entity extraction, embeddings **generation**
 - Story clustering, ranking, trending
 - the public product UI and multi-publication rendering
 
 The home route (`/`) is a **foundation placeholder**, not the product homepage.
+Public page rendering does **not** depend on the database or any live AI call.
 
 Scope is governed by [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md). Do not implement later stages without
@@ -38,20 +40,34 @@ explicit instruction.
 
 ## Tech stack
 
-| Concern    | Choice                                       |
-| ---------- | -------------------------------------------- |
-| Framework  | Next.js (App Router) + React                 |
-| Language   | TypeScript (strict)                          |
-| Styling    | Tailwind CSS                                 |
-| Linting    | ESLint (flat config) + `eslint-config-next`  |
-| Formatting | Prettier                                     |
-| Testing    | Vitest + Testing Library (jsdom)             |
-| Env safety | Zod runtime validation (`src/config/env.ts`) |
+| Concern    | Choice                                        |
+| ---------- | --------------------------------------------- |
+| Framework  | Next.js (App Router) + React                  |
+| Language   | TypeScript (strict)                           |
+| Styling    | Tailwind CSS                                  |
+| Linting    | ESLint (flat config) + `eslint-config-next`   |
+| Formatting | Prettier                                      |
+| Testing    | Vitest + Testing Library (jsdom)              |
+| Env safety | Zod runtime validation (`src/config/env.ts`)  |
+| Database   | PostgreSQL / Supabase + pgvector (prepared)   |
+| DB access  | `pg` behind a repository layer (`src/domain`) |
 
 ## Requirements
 
 - **Node.js 22** (see [`.nvmrc`](.nvmrc); Node 20.9+ is required by Next.js 16).
 - **npm** (the repository uses `package-lock.json`).
+- **PostgreSQL 15+ with the `pgvector` extension available** for the database
+  commands (migrations/seed/tests). Supabase provides both out of the box. For a
+  purely local database, the `pgvector/pgvector` Docker image is the simplest
+  option:
+
+  ```bash
+  docker run --name vibecoding-db -e POSTGRES_PASSWORD=postgres \
+    -e POSTGRES_DB=vibecoding -p 5432:5432 -d pgvector/pgvector:pg16
+  ```
+
+  The application itself builds and boots without a database; only the `db:*`
+  commands require one.
 
 ## Setup
 
@@ -65,7 +81,11 @@ cp .env.example .env.local
 # 3. Validate the environment
 npm run env:check
 
-# 4. Start the dev server
+# 4. (Optional) Point DATABASE_URL at your database, then initialise it
+#    (runs migrations, seeds the controlled taxonomy, and validates the schema)
+npm run db:setup
+
+# 5. Start the dev server
 npm run dev
 ```
 
@@ -83,8 +103,48 @@ directly.
   gitignored.
 - Supported deployment targets: **local**, **preview**, **production** (via the
   `APP_ENV` variable, which is distinct from `NODE_ENV`).
-- Stage 2A requires no secrets; every variable has a safe default. Database and
-  AI provider variables are reserved for later stages.
+- `DATABASE_URL` (and optionally `DIRECT_URL`) configure the PostgreSQL/Supabase
+  connection. They are optional for building and running the app, but required
+  for the `db:*` commands and database integration tests. AI provider variables
+  remain reserved for later stages.
+
+## Database
+
+The canonical data model lives in PostgreSQL (Supabase in production). Access
+goes through a lightweight repository layer in [`src/domain`](src/domain); UI and
+route code must not query the database directly.
+
+### Migrations
+
+Migrations are plain, ordered `.sql` files in
+[`src/db/migrations`](src/db/migrations), applied by a small dependency-free
+runner ([`src/db/migrate.ts`](src/db/migrate.ts)). Each file runs in its own
+transaction and is recorded in a `schema_migrations` table, so re-running is
+idempotent and the schema is fully reproducible from source — no external CLI
+required.
+
+```bash
+npm run db:migrate    # apply pending migrations
+npm run db:seed       # seed the controlled top-level Topic taxonomy (idempotent)
+npm run db:validate   # assert the database is reachable and complete
+npm run db:setup      # migrate + seed + validate, in order
+```
+
+Add schema changes only by adding a new numbered migration file — never by
+editing an already-applied one.
+
+### Seed data
+
+Seeds are limited to genuinely controlled reference data. Currently that is the
+twelve controlled top-level Topics (defined in
+[`src/domain/topics.ts`](src/domain/topics.ts)). Seeding never overwrites
+existing rows.
+
+### pgvector
+
+The `vector` extension is enabled by the first migration to prepare for future
+semantic search and clustering. Embedding tables exist but **no embeddings are
+generated in this stage**.
 
 ## Scripts
 
@@ -101,6 +161,10 @@ directly.
 | `npm test`             | Run the Vitest suite once                |
 | `npm run test:watch`   | Run Vitest in watch mode                 |
 | `npm run env:check`    | Validate environment variables           |
+| `npm run db:migrate`   | Apply pending database migrations        |
+| `npm run db:seed`      | Seed controlled reference data           |
+| `npm run db:validate`  | Validate database connectivity + schema  |
+| `npm run db:setup`     | Migrate, seed, and validate in one step  |
 
 ## Testing
 
@@ -109,6 +173,18 @@ files live in `tests/` (and co-located `*.test.ts[x]` files are also picked up).
 
 ```bash
 npm test
+```
+
+Domain, environment, and migration-integrity tests run with no external
+dependencies. The database **integration** tests
+([`tests/db/schema.integration.test.ts`](tests/db/schema.integration.test.ts))
+are **skipped automatically unless `DATABASE_URL` is set**, so CI stays green
+without a database while local/dev runs get full coverage. Each integration test
+runs inside a transaction that is always rolled back, leaving the database
+untouched. To run them:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/vibecoding npm test
 ```
 
 ## Build
@@ -130,14 +206,18 @@ not be made green by disabling checks.
 src/
   app/           Next.js App Router (layout, routes, global styles)
   config/        Environment validation and typed configuration
+  db/            Connection pool, migration runner, seed, validation
+    migrations/  Ordered .sql migration files (source of truth for the schema)
+  domain/        Controlled vocabularies, row types, and repositories
+    repositories/  Data-access boundary (Source/Article/Story/Entity/Topic)
 scripts/         Standalone maintenance scripts (e.g. env validation)
-tests/           Vitest test suites
+tests/           Vitest test suites (domain, db, config, app)
 docs/            Product, architecture, data-model, and roadmap docs
 .github/         CI workflows
 ```
 
-Additional architectural seams (`domain/`, `ingestion/`, `ai/`, `db/`,
-`inngest/`, `components/`) are defined in
+The remaining architectural seams (`ingestion/`, `ai/`, `inngest/`,
+`components/`) are defined in
 [`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) and will be introduced **when the
 corresponding roadmap stage requires them**. Following the project rule, empty
 folders are not created merely to imitate the target architecture.
