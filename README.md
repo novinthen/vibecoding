@@ -18,27 +18,39 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 3 — News Ingestion Engine.**
+**Stage 4 — Admin & Editorial Operations.**
 
-On top of the Stage 2 foundation (application + canonical PostgreSQL/Supabase
-data model), this repository now contains the first reliable news-ingestion
-pipeline:
+On top of the Stage 3 ingestion engine, this repository now contains a secure
+admin/editorial control plane at `/admin` — the minimum needed to operate and
+inspect the aggregator. It is part of the same Next.js application (a modular
+monolith, not a separate service):
+
+- **Overview** — source health counts, recent failures/fetches, recently
+  ingested Articles, and Sources needing attention.
+- **Sources** — list, inspect, create, edit permitted fields, enable/disable,
+  inspect health / failures / last success / conditional-fetch state, and
+  **manually trigger ingestion** (delegated to the Stage 3 engine — no
+  duplicated logic).
+- **Fetches** — recent `SourceFetch` attempts across all Sources, with status
+  filtering and error details.
+- **Articles** — search/filter (Source, status, text) with date-ordered
+  pagination and a read-only detail view; the only Article mutation is a
+  lifecycle status change (Article ≠ Story; source facts stay read-only).
+- **Topics** — controlled taxonomy: add sub-Topics and enable/disable.
+
+Access is gated by an env-configured admin roster (scrypt password hashes) and a
+stateless HMAC-signed httpOnly session cookie; roles are `ADMIN`/`EDITOR`/
+`VIEWER`, and authorization is enforced **server-side** on every mutation. Every
+meaningful mutation writes an `AdminAuditLog` record. See
+[`docs/ADMIN.md`](docs/ADMIN.md) and [`src/admin`](src/admin).
+
+The prior Stage 3 ingestion pipeline is unchanged:
 
 ```text
 Source → fetch → parse → normalize → canonicalize URL
        → exact deduplication → Article persistence → SourceFetch audit
        → Source health
 ```
-
-It ships a Source Adapter contract; an RSS/Atom adapter (RSS 2.0, RSS 1.0/RDF,
-Atom 1.0); a safe HTTP fetcher (timeout, bounded redirects, conditional
-ETag/Last-Modified requests, response-size cap, SSRF protection, retryable-error
-classification); deterministic URL canonicalization with tracking-parameter
-removal; exact deduplication via canonical-URL hashing and the existing Article
-unique constraints; SourceFetch audit records; deterministic Source-health
-transitions; and a CLI ingestion entry point (`npm run ingest`). Ingestion
-creates/updates **Articles only** — never Stories. See
-[`src/ingestion`](src/ingestion).
 
 The following remain **intentionally not implemented yet** and must not be added
 without moving to the appropriate roadmap stage:
@@ -51,6 +63,7 @@ without moving to the appropriate roadmap stage:
 
 The home route (`/`) is a **foundation placeholder**, not the product homepage.
 Public page rendering does **not** depend on the database or any live AI call.
+The `/admin` surface is the only stateful UI, and it is not publicly writable.
 
 Scope is governed by [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md). Do not implement later stages without
@@ -184,6 +197,7 @@ generated in this stage**.
 | `npm run db:validate`  | Validate database connectivity + schema  |
 | `npm run db:setup`     | Migrate, seed, and validate in one step  |
 | `npm run ingest`       | Manual/CLI ingestion (see below)         |
+| `npm run admin:hash`   | Generate a scrypt hash for an admin user |
 
 ## Ingestion
 
@@ -213,6 +227,30 @@ CI:
 ```bash
 INGEST_LIVE_SMOKE=1 npx vitest run tests/ingestion/live-smoke.test.ts
 ```
+
+## Admin
+
+The admin control plane is served at `/admin` by the same application. It
+requires `DATABASE_URL` plus two admin variables; without them the app still
+builds and `/admin/login` shows a "not configured" notice.
+
+```bash
+# 1. Hash a password (plaintext is never stored or committed):
+npm run admin:hash -- 'your-password'
+
+# 2. Configure the environment (e.g. in .env.local):
+ADMIN_SESSION_SECRET=$(openssl rand -hex 32)
+ADMIN_USERS=[{"username":"alice","passwordHash":"scrypt:...","role":"ADMIN"}]
+
+# 3. Run the app and sign in at http://localhost:3000/admin
+npm run dev
+```
+
+Roles are `ADMIN`/`EDITOR` (may mutate) and `VIEWER` (read-only); authorization
+is enforced server-side on every mutation, and every mutation is recorded in
+`admin_audit_log`. Manual ingestion triggered from a Source page reuses the
+Stage 3 safe fetcher unchanged. Full details, including the security model, are
+in [`docs/ADMIN.md`](docs/ADMIN.md).
 
 ## Testing
 

@@ -43,6 +43,22 @@ const serverSchema = z.object({
    * migrations fall back to DATABASE_URL.
    */
   DIRECT_URL: z.string().url().optional(),
+  /**
+   * Secret used to sign admin session cookies (Stage 4). A server-only secret,
+   * never exposed to the browser and never committed. Optional so the app still
+   * builds without an admin configured; the admin auth layer validates its
+   * presence explicitly at call time via `requireAdminAuthConfig()`. Must be
+   * long/high-entropy in production (enforced there by the same check).
+   */
+  ADMIN_SESSION_SECRET: z.string().min(1).optional(),
+  /**
+   * Admin account roster (Stage 4) as a JSON array of
+   * `{ username, passwordHash, role? }`. Passwords are stored ONLY as scrypt
+   * hashes (see `scripts/admin-hash.ts`); plaintext credentials are never
+   * accepted here. Optional at build/boot; the admin auth layer parses and
+   * validates the shape at call time. Never commit a real roster.
+   */
+  ADMIN_USERS: z.string().min(1).optional(),
 });
 
 /**
@@ -123,4 +139,41 @@ export function requireDatabaseUrl(env: AppEnv = appEnv): string {
     );
   }
   return env.DATABASE_URL;
+}
+
+/** Admin auth configuration resolved from the environment. */
+export interface AdminAuthConfig {
+  sessionSecret: string;
+  usersJson: string;
+}
+
+/**
+ * Resolve the admin auth configuration (Stage 4) or throw a clear error when
+ * the admin surface is not configured. Kept as a function so that non-admin
+ * code paths (public pages, build) never require these secrets to be present.
+ */
+export function requireAdminAuthConfig(env: AppEnv = appEnv): AdminAuthConfig {
+  if (!env.ADMIN_SESSION_SECRET || !env.ADMIN_USERS) {
+    throw new Error(
+      'Admin surface is not configured. Set ADMIN_SESSION_SECRET and ' +
+        'ADMIN_USERS in your environment. See .env.example and ' +
+        'docs/ADMIN.md.',
+    );
+  }
+  // In production a short/low-entropy signing secret would let anyone forge a
+  // session cookie; refuse to run rather than fail open.
+  if (env.NODE_ENV === 'production' && env.ADMIN_SESSION_SECRET.length < 32) {
+    throw new Error(
+      'ADMIN_SESSION_SECRET must be at least 32 characters in production.',
+    );
+  }
+  return {
+    sessionSecret: env.ADMIN_SESSION_SECRET,
+    usersJson: env.ADMIN_USERS,
+  };
+}
+
+/** Whether the admin surface is configured, without throwing. */
+export function isAdminConfigured(env: AppEnv = appEnv): boolean {
+  return Boolean(env.ADMIN_SESSION_SECRET && env.ADMIN_USERS);
 }

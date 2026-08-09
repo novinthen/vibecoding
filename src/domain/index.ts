@@ -12,16 +12,24 @@ export { TopicRepository } from './repositories/topic-repository';
 export {
   SourceRepository,
   type CreateSourceInput,
+  type UpdateSourceInput,
   type UpdateFetchStateInput,
 } from './repositories/source-repository';
 export {
   SourceFetchRepository,
   type CompleteFetchInput,
+  type SourceFetchWithSourceRow,
 } from './repositories/source-fetch-repository';
 export {
   ArticleRepository,
   type CreateArticleInput,
+  type ArticleFilter,
 } from './repositories/article-repository';
+export {
+  AdminAuditLogRepository,
+  type RecordAuditInput,
+  type ListAuditOptions,
+} from './repositories/admin-audit-log-repository';
 export {
   StoryRepository,
   type CreateStoryInput,

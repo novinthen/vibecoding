@@ -22,7 +22,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:validate": "tsx src/db/validate.ts",
     "db:setup": "npm run db:migrate && npm run db:seed && npm run db:validate",
-    "ingest": "tsx scripts/ingest.ts"
+    "ingest": "tsx scripts/ingest.ts",
+    "admin:hash": "tsx scripts/admin-hash.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^5.10.1",

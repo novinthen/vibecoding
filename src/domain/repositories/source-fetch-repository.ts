@@ -77,4 +77,43 @@ export class SourceFetchRepository {
     );
     return result.rows;
   }
+
+  /**
+   * Recent fetch attempts across all Sources (admin Fetches view), newest first,
+   * joined with the Source's slug/name for display. Optionally scoped to a
+   * status (e.g. only FAILED) so failed/degraded Sources are easy to surface.
+   */
+  async listRecentGlobal(
+    options: { limit?: number; status?: SourceFetchStatus } = {},
+  ): Promise<SourceFetchWithSourceRow[]> {
+    const limit = clampLimit(options.limit, 50);
+    const params: unknown[] = [];
+    let statusClause = '';
+    if (options.status) {
+      params.push(options.status);
+      statusClause = `WHERE f.status = $${params.length}`;
+    }
+    params.push(limit);
+    const result = await this.db.query<SourceFetchWithSourceRow>(
+      `SELECT f.*, s.slug AS source_slug, s.name AS source_name
+       FROM source_fetches f
+       JOIN sources s ON s.id = f.source_id
+       ${statusClause}
+       ORDER BY f.started_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows;
+  }
+}
+
+/** A SourceFetch row joined with its Source's display fields. */
+export interface SourceFetchWithSourceRow extends SourceFetchRow {
+  source_slug: string;
+  source_name: string;
+}
+
+function clampLimit(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value), 1), 200);
 }

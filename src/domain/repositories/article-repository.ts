@@ -1,5 +1,6 @@
 import type { Db } from '@/db/client';
 
+import type { ArticleStatus } from '../enums';
 import type { ArticleRow } from '../types';
 
 export interface CreateArticleInput {
@@ -71,6 +72,63 @@ export class ArticleRepository {
     return result.rows;
   }
 
+  /**
+   * Admin search/filter over Articles. Supports Source, status, and a
+   * case-insensitive title/excerpt substring filter, ordered by publication
+   * recency, with pagination. The search term is always a bound parameter
+   * (never interpolated), so untrusted admin input cannot alter the query.
+   */
+  async search(filter: ArticleFilter = {}): Promise<ArticleRow[]> {
+    const { where, params } = buildArticleWhere(filter);
+    const limit = clampLimit(filter.limit, 50);
+    const offset =
+      filter.offset && filter.offset > 0 ? Math.trunc(filter.offset) : 0;
+    params.push(limit, offset);
+    const result = await this.db.query<ArticleRow>(
+      `SELECT * FROM articles
+       ${where}
+       ORDER BY published_at DESC NULLS LAST, discovered_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return result.rows;
+  }
+
+  /** Most recently ingested Articles across all Sources (overview view). */
+  async listRecentlyDiscovered(limit = 10): Promise<ArticleRow[]> {
+    const result = await this.db.query<ArticleRow>(
+      `SELECT * FROM articles ORDER BY discovered_at DESC LIMIT $1`,
+      [clampLimit(limit, 10)],
+    );
+    return result.rows;
+  }
+
+  /** Count Articles matching the same filter (for pagination). */
+  async count(filter: ArticleFilter = {}): Promise<number> {
+    const { where, params } = buildArticleWhere(filter);
+    const result = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM articles ${where}`,
+      params,
+    );
+    return Number(result.rows[0]?.count ?? '0');
+  }
+
+  /**
+   * Change an Article's lifecycle status (editorial control). Only the status
+   * column is written — source-supplied facts are never touched (provenance
+   * rule). Returns the updated row, or null when the id does not exist.
+   */
+  async updateStatus(
+    id: string,
+    status: ArticleStatus,
+  ): Promise<ArticleRow | null> {
+    const result = await this.db.query<ArticleRow>(
+      `UPDATE articles SET status = $2 WHERE id = $1 RETURNING *`,
+      [id, status],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async create(input: CreateArticleInput): Promise<ArticleRow> {
     const result = await this.db.query<ArticleRow>(
       `INSERT INTO articles
@@ -105,6 +163,58 @@ export class ArticleRepository {
     );
     return result.rows[0] ?? null;
   }
+}
+
+/** Filter/pagination options for the admin Article search. */
+export interface ArticleFilter {
+  sourceId?: string;
+  status?: ArticleStatus;
+  /** Case-insensitive substring matched against title and excerpt. */
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Build a parameterized WHERE clause from a filter. Every value is a bound
+ * parameter; the search term is wrapped for ILIKE with escaped wildcards so an
+ * admin cannot inject SQL wildcards that change matching semantics unexpectedly.
+ */
+function buildArticleWhere(filter: ArticleFilter): {
+  where: string;
+  params: unknown[];
+} {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.sourceId) {
+    params.push(filter.sourceId);
+    clauses.push(`source_id = $${params.length}`);
+  }
+  if (filter.status) {
+    params.push(filter.status);
+    clauses.push(`status = $${params.length}`);
+  }
+  const search = filter.search?.trim();
+  if (search) {
+    params.push(`%${escapeLike(search)}%`);
+    const idx = params.length;
+    clauses.push(
+      `(original_title ILIKE $${idx} ESCAPE '\\' OR original_excerpt ILIKE $${idx} ESCAPE '\\')`,
+    );
+  }
+  return {
+    where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+function clampLimit(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value), 1), 200);
 }
 
 /** Positional parameters shared by the create/createIfAbsent inserts. */
