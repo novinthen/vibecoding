@@ -1,7 +1,7 @@
-# Public Portal (Stage 5)
+# Public Portal (Stage 5 + 5B)
 
-The public portal is the first useful, publication-aware public surface for the
-Vibe Coding News Portal. It is part of the same Next.js modular monolith, reads
+The public portal is the useful, publication-aware, localisation-ready public
+surface for the Vibe Coding News Portal. It is part of the same Next.js modular monolith, reads
 from PostgreSQL (the authoritative store), and never depends on a live AI call.
 
 This document describes the public architecture, the honest handling of the
@@ -73,9 +73,74 @@ metadata. `APP_ENV` (the deployment target, distinct from `NODE_ENV`) is the
 signal: `preview` is treated like development so previews stay usable. No
 production domain is hardcoded anywhere.
 
-The full Stage 5B localisation workflow (StoryLocalization editing, per-publication
-RSS, translation review, multiple deployed sites) is intentionally **out of
-scope**.
+### Stage 5B — multi-publication localisation (implemented)
+
+The Stage 5B localisation workflow is now implemented on top of the resolution
+seam above. Highlights:
+
+- **Publication administration** lives at `/admin/publications` (server-authorized,
+  audited): list/create/edit/(de)activate Publications; default locale, timezone,
+  branding, SEO, and editorial profile; add/remove/enable/disable domains with a
+  primary per Publication and global domain uniqueness.
+
+  **PublicationDomain lifecycle invariants** (enforced atomically per mutation):
+  - a **DISABLED** domain is never primary;
+  - **at most one** primary domain per Publication (DB partial unique index);
+  - an **ACTIVE** Publication with ≥1 enabled domain has **exactly one enabled
+    primary**.
+
+  Rules: the **first** domain of a Publication becomes primary automatically
+  (regardless of the checkbox); a later domain is primary only when explicitly
+  selected, atomically replacing the previous primary; a disabled domain cannot
+  be made primary. When the current primary is **disabled or removed**, a
+  deterministic replacement (the oldest remaining *enabled* domain) is promoted
+  automatically — and if there is **no** enabled replacement while the
+  Publication is **ACTIVE**, the mutation is refused (deactivate first).
+  Re-enabling a domain when the Publication has no primary promotes it. New
+  Publications are created **INACTIVE**; activation is refused unless an enabled
+  primary domain exists. A Publication with no domains may remain INACTIVE.
+- **PublicationStory** attaches a real canonical Story to a Publication and edits
+  only per-Publication presentation (slug/headline/summary/why-it-matters/
+  featured/priority/status). Canonical Story facts are never touched, and the
+  same Story may be published by many Publications with different headlines.
+- **StoryLocalization** stores locale rows (one per `(publication_story, locale)`)
+  with localized text, status, translation provenance, and reviewer. Stage 5B is
+  manual/editorial + import only — no automated translation provider runs.
+
+#### Public locale resolution and fallback
+
+Locale selection is deterministic and **publication-controlled**. The domain
+determines the Publication; the locale is then:
+
+1. a valid `?locale=` request parameter, when present and well-formed; else
+2. the Publication's `default_locale`.
+
+Browser `Accept-Language` is never consulted (`src/public/locale.ts`). Once a
+locale is chosen, content resolution (`getStoryPage`) applies, in order:
+
+1. an approved (**PUBLISHED**) `StoryLocalization` for the chosen locale;
+2. else the Publication's default-locale localisation;
+3. else the Publication's own canonical publication copy (the deliberate
+   fallback).
+
+Every localisation read is scoped to the resolved `PublicationStory`, so content
+is **never** borrowed from another locale beyond this rule, and **never** from
+another Publication. `<html lang>` reflects the Publication default; a Story
+served in a non-default locale additionally marks the rendered locale on its
+content element and in route metadata (OG locale + hreflang alternates).
+
+#### SEO and feeds
+
+- Canonical URLs are per-Publication (built from the validated domain). A
+  localised view canonicalises to its own `?locale=` variant; hreflang
+  `alternates.languages` list the Story's approved locales **within the same
+  Publication origin only** — an independent Malay Publication is never
+  cross-canonicalised to an English one.
+- `sitemap.xml` lists real published Stories for the resolved Publication.
+- `/feed.xml` is a publication-aware Atom feed: the Publication's domain,
+  PUBLISHED Story selection, editorial copy, default-locale metadata, and
+  Publication attribution. It fails closed on an unresolved production host and
+  is honestly empty when no Stories are published.
 
 ## Data access
 
@@ -167,3 +232,19 @@ of the `<script>` element.
 - `tests/public/content.integration.test.ts` — DB-gated: Publication resolution,
   Article visibility, Topic filtering, search, Source counts, Entity reads,
   pagination, and the Story seam (empty and populated).
+
+### Stage 5B tests
+
+- `tests/domain/locale.test.ts` — BCP-47-ish locale validation/canonicalisation.
+- `tests/public/locale.test.ts` — locale policy: target selection + fallback merge.
+- `tests/public/feed.test.ts` — Atom feed structure, escaping, empty feed.
+- `tests/public/metadata.test.ts` — OG locale override + same-origin hreflang alternates.
+- `tests/admin/validation.test.ts` — Publication/domain/localisation schema parsing.
+- `tests/admin/publications.integration.test.ts` — DB-gated: publication/domain
+  authorization + audit, domain uniqueness, one-primary-domain invariant,
+  PublicationStory separation from canonical facts, localisation parentage,
+  one-locale-per-PublicationStory, multi-locale, same Story localised by
+  different Publications, and cross-Publication isolation.
+- `tests/public/localization.integration.test.ts` — DB-gated: public locale
+  fallback, PUBLISHED-only localisation visibility, and no cross-Publication
+  leakage.

@@ -7,8 +7,9 @@ import type {
   PublicArticleListItem,
   PublicEntity,
   PublicSource,
-  PublicStory,
+  PublicStoryLocalization,
   PublicTopicWithCount,
+  PublishedStory,
 } from '@/public/types';
 
 /**
@@ -220,15 +221,22 @@ export class PublicContentRepository {
    * Resolve a Story published by a Publication, by the Publication-specific
    * slug. Returns the publication's editorial projection (headline/summary)
    * falling back to canonical Story fields, only for a PublicationStory in
-   * PUBLISHED status. Returns null when the Publication has no such Story — which
-   * is the current state everywhere, since no Stories are published yet.
+   * PUBLISHED status. The parent PublicationStory id rides along so the caller
+   * can attach a locale variant. Returns null when the Publication has no such
+   * Story.
+   *
+   * The result is the Publication's DEFAULT publication copy (the deliberate
+   * fallback when no approved localisation exists) — locale overrides are applied
+   * by the composition layer, scoped strictly to THIS PublicationStory so
+   * localisation content can never leak in from another Publication.
    */
   async findPublishedStory(
     publicationId: string,
     slug: string,
-  ): Promise<PublicStory | null> {
+  ): Promise<PublishedStory | null> {
     const result = await this.db.query<StoryRow>(
       `SELECT st.id,
+              ps.id AS publication_story_id,
               COALESCE(ps.slug, st.slug) AS slug,
               COALESCE(ps.headline, st.canonical_title) AS title,
               COALESCE(ps.published_summary, st.summary) AS summary,
@@ -244,7 +252,72 @@ export class PublicContentRepository {
       [publicationId, slug],
     );
     const row = result.rows[0];
-    return row ? mapStory(row) : null;
+    return row ? mapPublishedStory(row) : null;
+  }
+
+  /**
+   * The PUBLISHED locale variant of a PublicationStory, or null. Scoped to the
+   * parent `publicationStoryId`, so it can only ever return a localisation that
+   * belongs to this exact (Publication, Story) attachment — never one from a
+   * different Publication. Only PUBLISHED localisations are visible publicly;
+   * DRAFT/REVIEW/ARCHIVED variants are not served.
+   */
+  async findPublishedLocalization(
+    publicationStoryId: string,
+    locale: string,
+  ): Promise<PublicStoryLocalization | null> {
+    const result = await this.db.query<LocalizationRow>(
+      `SELECT locale, headline, summary, why_it_matters
+       FROM story_localizations
+       WHERE publication_story_id = $1 AND locale = $2 AND status = 'PUBLISHED'
+       LIMIT 1`,
+      [publicationStoryId, locale],
+    );
+    const row = result.rows[0];
+    return row ? mapLocalization(row) : null;
+  }
+
+  /** Locales with a PUBLISHED localisation for a PublicationStory (for SEO alternates). */
+  async listPublishedLocales(publicationStoryId: string): Promise<string[]> {
+    const result = await this.db.query<{ locale: string }>(
+      `SELECT locale FROM story_localizations
+       WHERE publication_story_id = $1 AND status = 'PUBLISHED'
+       ORDER BY locale ASC`,
+      [publicationStoryId],
+    );
+    return result.rows.map((r) => r.locale);
+  }
+
+  /**
+   * PUBLISHED Stories for a Publication (sitemap/feed), most recent first. Only
+   * PublicationStories in PUBLISHED status with a slug are returned; canonical
+   * facts are read for display only.
+   */
+  async listPublishedStoriesForPublication(
+    publicationId: string,
+    options: { limit?: number } = {},
+  ): Promise<PublishedStory[]> {
+    const limit = clampLimit(options.limit, 50);
+    const result = await this.db.query<StoryRow>(
+      `SELECT st.id,
+              ps.id AS publication_story_id,
+              ps.slug AS slug,
+              COALESCE(ps.headline, st.canonical_title) AS title,
+              COALESCE(ps.published_summary, st.summary) AS summary,
+              COALESCE(ps.published_why_it_matters, st.why_it_matters) AS why_it_matters,
+              ps.published_at,
+              st.last_activity_at,
+              t.name AS topic_name, t.slug AS topic_slug
+       FROM publication_stories ps
+       JOIN stories st ON st.id = ps.story_id
+       LEFT JOIN topics t ON t.id = st.primary_topic_id AND t.enabled = true
+       WHERE ps.publication_id = $1 AND ps.status = 'PUBLISHED' AND ps.slug IS NOT NULL
+       ORDER BY ps.featured DESC, ps.editorial_priority DESC,
+                ps.published_at DESC NULLS LAST
+       LIMIT $2`,
+      [publicationId, limit],
+    );
+    return result.rows.map(mapPublishedStory);
   }
 
   /** Publicly-visible Articles that belong to a Story (member reporting). */
@@ -376,6 +449,7 @@ interface EntityRow {
 
 interface StoryRow {
   id: string;
+  publication_story_id: string;
   slug: string;
   title: string;
   summary: string | null;
@@ -384,6 +458,13 @@ interface StoryRow {
   last_activity_at: string | null;
   topic_name: string | null;
   topic_slug: string | null;
+}
+
+interface LocalizationRow {
+  locale: string;
+  headline: string | null;
+  summary: string | null;
+  why_it_matters: string | null;
 }
 
 function mapArticleListItem(row: ArticleListRow): PublicArticleListItem {
@@ -426,9 +507,10 @@ function mapEntity(row: EntityRow): PublicEntity {
   };
 }
 
-function mapStory(row: StoryRow): PublicStory {
+function mapPublishedStory(row: StoryRow): PublishedStory {
   return {
     id: row.id,
+    publicationStoryId: row.publication_story_id,
     slug: row.slug,
     title: row.title,
     summary: row.summary,
@@ -437,6 +519,15 @@ function mapStory(row: StoryRow): PublicStory {
     topicSlug: row.topic_slug,
     publishedAt: row.published_at,
     lastActivityAt: row.last_activity_at,
+  };
+}
+
+function mapLocalization(row: LocalizationRow): PublicStoryLocalization {
+  return {
+    locale: row.locale,
+    headline: row.headline,
+    summary: row.summary,
+    whyItMatters: row.why_it_matters,
   };
 }
 

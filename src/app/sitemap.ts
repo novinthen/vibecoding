@@ -29,17 +29,29 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   if (!isDatabaseConfigured()) return staticEntries;
 
+  // Only a database-resolved Publication has real published Stories; the in-code
+  // default has none.
+  const publicationId =
+    resolution.status === 'database' ? resolution.config.id : null;
+
   try {
     const repo = new PublicContentRepository(getDb());
-    const [topics, entities, articles] = await Promise.all([
+    const [topics, entities, articles, stories] = await Promise.all([
       repo.listTopLevelTopicsWithCounts(),
       repo.listEntities(),
       repo.listArticles({ limit: 200 }),
+      publicationId
+        ? repo.listPublishedStoriesForPublication(publicationId, { limit: 200 })
+        : Promise.resolve([]),
     ]);
     return [
       ...staticEntries,
       ...topics.map((topic) => ({ url: abs(`/topic/${topic.slug}`) })),
       ...entities.map((entity) => ({ url: abs(`/tool/${entity.slug}`) })),
+      ...stories.map((story) => ({
+        url: abs(`/story/${story.slug}`),
+        lastModified: story.publishedAt ?? story.lastActivityAt ?? undefined,
+      })),
       ...articles.map((article) => ({
         url: abs(`/article/${article.id}`),
         lastModified: article.publishedAt ?? article.discoveredAt,

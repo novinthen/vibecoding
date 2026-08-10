@@ -5,6 +5,7 @@
  * repositories so callers depend on `@/domain` rather than reaching into files.
  */
 export * from './enums';
+export * from './locale';
 export * from './slug';
 export * from './topics';
 export * from './types';
@@ -43,7 +44,20 @@ export {
   EntityRepository,
   type CreateEntityInput,
 } from './repositories/entity-repository';
-export { PublicationRepository } from './repositories/publication-repository';
+export {
+  PublicationRepository,
+  type CreatePublicationInput,
+  type UpdatePublicationInput,
+} from './repositories/publication-repository';
+export {
+  PublicationStoryRepository,
+  type PublicationStoryInput,
+  type PublicationStoryWithStoryRow,
+} from './repositories/publication-story-repository';
+export {
+  StoryLocalizationRepository,
+  type StoryLocalizationInput,
+} from './repositories/story-localization-repository';
 export {
   PublicContentRepository,
   type PublicArticleQuery,

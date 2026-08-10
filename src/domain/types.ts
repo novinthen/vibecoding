@@ -3,10 +3,13 @@ import type {
   AuthorityTier,
   EntityType,
   HealthStatus,
+  LocalizationStatus,
   PublicationStatus,
+  PublicationStoryStatus,
   SourceFetchStatus,
   SourceType,
   StoryStatus,
+  TranslationSource,
 } from './enums';
 
 /**
@@ -24,6 +27,63 @@ export interface PublicationRow {
   editorial_profile: Record<string, unknown>;
   branding: Record<string, unknown>;
   seo_settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One PublicationDomain — a hostname mapped to a Publication. Domains are
+ * globally unique, and at most one per Publication may be `is_primary`.
+ */
+export interface PublicationDomainRow {
+  id: string;
+  publication_id: string;
+  domain: string;
+  is_primary: boolean;
+  enabled: boolean;
+  created_at: string;
+}
+
+/**
+ * One PublicationStory — per-Publication publishing control for a canonical
+ * Story. Carries only publication-specific presentation (slug/headline/summary/
+ * why-it-matters/status/featured/priority); it never alters canonical Story
+ * facts. Unique on (publication_id, story_id).
+ */
+export interface PublicationStoryRow {
+  id: string;
+  publication_id: string;
+  story_id: string;
+  status: PublicationStoryStatus;
+  slug: string | null;
+  headline: string | null;
+  published_summary: string | null;
+  published_why_it_matters: string | null;
+  featured: boolean;
+  editorial_priority: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One StoryLocalization — a locale-specific editorial variant of a published
+ * Story, belonging to a PublicationStory (Story → PublicationStory →
+ * StoryLocalization). Languages are rows keyed by `locale`, never columns.
+ * Unique on (publication_story_id, locale).
+ */
+export interface StoryLocalizationRow {
+  id: string;
+  publication_story_id: string;
+  locale: string;
+  headline: string | null;
+  summary: string | null;
+  why_it_matters: string | null;
+  translation_source: TranslationSource | null;
+  model_provider: string | null;
+  model_name: string | null;
+  status: LocalizationStatus;
+  reviewed_by: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -34,6 +34,22 @@ export class StoryRepository {
     return result.rows[0] ?? null;
   }
 
+  /**
+   * Recent Stories (admin view), most recently active first. Used when attaching
+   * a canonical Story to a Publication — the editor picks a real Story, so no
+   * fake Story is ever invented to demonstrate publishing.
+   */
+  async listRecent(limit = 100): Promise<StoryRow[]> {
+    const capped = Math.min(Math.max(Math.trunc(limit), 1), 500);
+    const result = await this.db.query<StoryRow>(
+      `SELECT * FROM stories
+       ORDER BY last_activity_at DESC NULLS LAST, created_at DESC
+       LIMIT $1`,
+      [capped],
+    );
+    return result.rows;
+  }
+
   async create(input: CreateStoryInput): Promise<StoryRow> {
     const result = await this.db.query<StoryRow>(
       `INSERT INTO stories (slug, canonical_title, primary_topic_id)

@@ -1,6 +1,6 @@
 # Current Stage
 
-# Stage 5 — Public Portal
+# Stage 5B — Multi-Publication Localisation
 
 ## Status
 
@@ -8,124 +8,149 @@
 
 This file defines the only implementation scope currently approved.
 
-Stage 3 (News Ingestion Engine) and Stage 4 (Admin & Editorial Operations) are
-complete and merged. Do not begin Stage 5B (multi-publication localisation),
-Stage 6 (AI), Stage 7 (Clustering), Stage 8 (Ranking/Trending), GitHub
-ingestion, or Hacker News ingestion.
+Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), and
+Stage 5 (Public Portal) are complete and merged. Do not begin Stage 6 (AI),
+Stage 7 (Clustering), Stage 8 (Ranking/Trending), GitHub ingestion, or Hacker
+News ingestion.
 
 ---
 
 # Goal
 
-Ship the first useful, publication-aware **public** vibe-coding news portal on
-top of the existing canonical data. It must be fast, readable, source-transparent,
-mobile-friendly, publication-aware, SEO-safe, and **honest about the current data
-state** — it shows what genuinely exists and never fabricates Story intelligence,
-trending, or AI summaries.
+Make the public portal genuinely multi-publication and localisation-ready:
 
-The public portal lives inside the same Next.js application (a modular monolith),
-reads from PostgreSQL (the authoritative store), and never depends on a live AI
-call.
+```
+one canonical intelligence backend
+  → multiple Publications
+  → multiple domains
+  → multiple locales
+  → publication-specific editorial presentation
+```
+
+Canonical Article/Story facts are **global** and are never duplicated. Each
+Publication is an independent editorial brand with its own domain(s), name,
+locale, positioning, Story selection, headline, summary, slug, publication
+state, and SEO identity. Localisation content for one Publication never leaks
+into another.
+
+The work builds on the existing schema (migrations `0003`, `0009`) — Publication,
+PublicationDomain, PublicationStory, StoryLocalization already exist — so
+**Stage 5B required no schema migrations**.
 
 ---
 
 # Implemented
 
-1. **Publication resolution** — `hostname → PublicationDomain → Publication →
-   public config`, resolved per request from the `Host`/`X-Forwarded-Host`
-   header, with a sensible in-code **default Publication** fallback so the portal
-   renders before any Publication is configured. No canonical domain, brand, or
-   locale is hardcoded. Site name, locale, tagline, description, canonical URL
-   base, and SEO metadata are publication-aware.
-2. **Public routes** — `/` (home: Latest, primary-source updates, topic nav),
-   `/latest`, `/article/[id]`, `/topic` + `/topic/[slug]`, `/tool` +
-   `/tool/[slug]`, `/story/[slug]`, `/search`, `/about`, `/sources`.
-3. **Article visibility** — a single domain rule
-   (`src/domain/article-visibility.ts`), expressed as both a TypeScript predicate
-   and a SQL fragment: publicly-visible = any status **except**
-   `HIDDEN`/`DUPLICATE`/`FAILED`. Applied to every public Article query.
-4. **Public data access** — a read-only `PublicContentRepository` and a
-   `PublicationRepository` behind the existing repository boundary; a
-   composition layer (`src/public/content.ts`) assembles page-ready view models
-   with pagination. Public projections never expose internal hashes or status
-   internals.
-5. **Search** — MVP full-text search using **PostgreSQL only** (a generated
-   `search_vector` tsvector + GIN index, queried with `websearch_to_tsquery`).
-   No external search engine.
-6. **Topic pages** — Articles associated through their Source's default Topic
-   (including enabled child Topics), the only Article↔Topic relationship that
-   exists today.
-7. **Entity/Tool foundation** — public Entity index and detail reading existing
-   Entity data; sparse (and honestly empty) until later enrichment stages
-   populate Entities and Article↔Entity links.
-8. **Story seam** — a real public Story route that renders **only** a published
-   `PublicationStory` for the active Publication and 404s otherwise. No fake
-   Story records are created.
-9. **SEO/metadata** — publication-aware titles, descriptions, canonical URLs,
-   Open Graph basics, robots directives, a dynamic sitemap, and conservative,
-   escaped JSON-LD on Article pages using only real fields.
-10. **Safety & attribution** — untrusted feed content is always escaped (never
-    raw HTML); outbound URLs are validated before linking; each item preserves
-    source name, original timestamp, and canonical URL with clear outbound
-    access; no internal hashes, DB errors, admin metadata, or secrets are exposed.
+1. **Publication administration** — an authorized, audited admin surface
+   (`/admin/publications`) to list, create, edit, and activate/deactivate
+   Publications; manage primary/default locale, timezone, branding (name,
+   tagline), SEO description, and editorial profile (positioning, audience);
+   and add/remove/enable/disable domains, mark one primary domain per
+   Publication, and enforce global domain uniqueness. Branding/SEO/editorial
+   JSONB edits **merge** (unknown keys preserved; AI/source facts never
+   overwritten). A **PublicationDomain lifecycle** keeps the invariant that an
+   ACTIVE Publication with domains has exactly one enabled primary: the first
+   domain auto-becomes primary; a disabled domain can never be primary;
+   disabling/removing the primary atomically promotes the oldest remaining
+   enabled domain (or is refused for an ACTIVE Publication with no replacement);
+   new Publications start INACTIVE and cannot be activated without an enabled
+   primary domain.
+2. **PublicationStory workflow** — attach a **real** canonical Story to a
+   Publication and edit its per-Publication presentation (slug, headline,
+   published summary, published "why it matters", featured, editorial priority,
+   status). Publishing stamps `published_at` once and requires a slug. Canonical
+   Story facts are never altered. The same Story may be published by many
+   Publications with different headlines. No fake Stories are created.
+3. **StoryLocalization workflow** — multiple locale rows per PublicationStory
+   (one per `(publication_story, locale)`), each with localized headline,
+   summary, why-it-matters, localisation status (DRAFT/REVIEW/PUBLISHED/
+   ARCHIVED), translation source/provenance, model provider/name, and
+   reviewer. Languages are **rows keyed by locale**, never columns. Stage 5B
+   supports **manual/editorial localisation and import of translated text** — no
+   automated AI translation provider is invoked (that is a Stage 6 seam).
+4. **Public locale resolution** — deterministic and publication-controlled:
+   the domain determines the Publication; the locale is a valid `?locale=`
+   parameter else the Publication's `default_locale`. Browser
+   `Accept-Language` is never consulted. Locales are validated against a
+   conservative BCP-47 subset.
+5. **Locale-aware Story rendering** — for a resolved Publication the Story route
+   loads the PUBLISHED PublicationStory, then applies an **approved
+   (PUBLISHED)** StoryLocalization for the chosen locale, else the
+   default-locale localisation, else the Publication's own canonical publication
+   copy. Every localisation read is scoped to that PublicationStory, so content
+   can never be borrowed from another Publication. Article pages remain based on
+   canonical Article/source facts and are never auto-translated.
+6. **SEO/localised metadata** — publication-specific canonical URLs built from
+   the validated domain; localized title/description; Open Graph locale reflects
+   the rendered locale; hreflang alternates cover a Story's approved locales
+   **within the same Publication origin** (never cross-domain); the root
+   `<html lang>` reflects the active Publication's default locale; the sitemap
+   lists real published Stories.
+7. **Publication-aware feed** — `/feed.xml` is an Atom feed scoped to the
+   resolved Publication: its domain, PUBLISHED Story selection, editorial copy,
+   default-locale metadata, and Publication attribution. It fails closed on an
+   unresolved production host and yields an honest empty feed when there are no
+   published Stories.
+8. **Auditability** — every Publication/domain/PublicationStory/StoryLocalization
+   mutation writes an `AdminAuditLog` row (actor, action, target, before/after,
+   metadata) inside the same transaction as the mutation.
 
-See [`docs/PUBLIC_PORTAL.md`](PUBLIC_PORTAL.md) for the public architecture,
-query/data-access design, and the honest-data-state decisions.
+See [`docs/PUBLIC_PORTAL.md`](PUBLIC_PORTAL.md) for the localisation architecture
+and resolution/fallback rules.
 
 ---
 
 # Do Not Implement
 
-- Trending/Important/ranking; AI summaries; why-it-matters generation; Entity
-  extraction; embeddings generation; Story clustering;
+- AI summaries; automated AI translation; Entity extraction; embeddings; Story
+  clustering; ranking/trending;
 - GitHub ingestion; Hacker News ingestion; arbitrary scraping;
-- the Stage 5B multi-publication localisation/translation workflow (multiple
-  deployed sites, `StoryLocalization` editing, per-publication RSS);
-- personalised feeds; user accounts; alerts; recommendations; comments; payments;
-- production scheduling; new queueing/search/database infrastructure.
+- user accounts; personalization; comments; recommendation ML; payments; native
+  apps;
+- new queueing/search/database infrastructure.
 
-Do not create fake data to compensate for deferred stages.
+Do not create fake Story data to demonstrate localisation.
 
 ---
 
 # Important Invariants
 
-- Article ≠ Story; the Article page is the current factual public unit and is
-  never presented as an AI-written Story.
-- Public rendering reads only from PostgreSQL and never depends on a live AI call.
-- Source facts (name, original URL, publication timestamp) are preserved and
-  prominently linked; the portal is a discovery/intelligence layer, not a
-  republishing engine, and does not reproduce full copyrighted articles.
-- Feed-derived Article/Source content is untrusted and never rendered as unsafe
-  HTML; outbound URLs are validated.
+- Canonical Articles and Stories are global; Publication-specific presentation
+  and localisation never overwrite canonical facts.
+- One Story may be published by many Publications; one PublicationStory may have
+  many locales; one locale may appear across many Publications; the same Story
+  may have different English headlines across different English Publications.
+- Localisation content from Publication A must never leak into Publication B.
+- Only PUBLISHED public content is rendered publicly (PublicationStory PUBLISHED;
+  StoryLocalization PUBLISHED).
+- Production domains continue to **fail closed** unless configured.
+- Locale selection is deterministic and publication-controlled; no browser
+  header silently changes the Publication or served locale.
 - No canonical domain logic assumes a single hostname, brand, or locale.
-- No secrets, raw credentials, internal hashes, or stack traces are exposed
-  publicly.
 
 ---
 
 # Exit Criteria
 
-Stage 5 is complete only when:
+Stage 5B is complete only when:
 
-- the public routes above render correct states for present, missing, and empty
-  data (e.g. unknown Topic/Story/Article → 404; no database configured → an
-  honest "unavailable" state; empty feeds → honest empty states);
-- Publication resolution works from the request hostname with a working default
-  fallback, and metadata (title/description/canonical/OG/robots/sitemap) is
-  publication-aware and free of hardcoded domains;
-- Article visibility, Topic filtering, and search behave correctly and safely
-  against the existing schema;
-- untrusted feed content renders safely and outbound links are validated;
-- tests (publication resolution, visibility, public queries, topic filtering,
-  search, safe rendering, safe outbound links, canonical metadata, empty/missing
-  states), the DB integration tests, the Stage 3 ingestion regression tests, the
-  Stage 4 admin/auth regression tests, typecheck, lint, format check, the full
-  test suite, and the production build all pass.
+- Publication/domain/PublicationStory/StoryLocalization admin is server-authorized
+  and audited; domain uniqueness and the one-primary-domain invariant hold;
+- PublicationStory presentation is separate from canonical Story facts, and
+  StoryLocalization parentage / one-locale-per-PublicationStory / multi-locale
+  behave correctly, with no cross-Publication leakage;
+- public locale resolution and the documented fallback render correctly, and
+  publication-specific canonical/metadata is generated without cross-domain
+  canonicalisation;
+- the production fail-closed behaviour is preserved;
+- Stage 3/4/5 regressions, the Stage 5B localisation tests, typecheck, lint,
+  format check, the full test suite, and the production build all pass, and at
+  least two configured Publications with different domains/locales smoke-test
+  correctly.
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 5B, Stage 6, Stage 7, ranking, GitHub ingestion, or Hacker
-News ingestion without explicit approval. Do not merge to `main` without review.
+Do not begin Stage 6, Stage 7, ranking, GitHub ingestion, or Hacker News
+ingestion without explicit approval. Do not merge to `main` without review.

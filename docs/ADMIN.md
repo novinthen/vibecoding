@@ -22,9 +22,26 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Topics** (`/admin/topics`): view the controlled taxonomy, add a sub-Topic
   under an existing top-level Topic, and enable/disable Topics. The fixed
   top-level taxonomy is not extended here.
+- **Publications** (`/admin/publications`, Stage 5B): list, create, edit, and
+  activate/deactivate Publications (name, slug, default locale, timezone,
+  branding, SEO description, editorial profile); add/remove/enable/disable
+  domains with a single primary per Publication and global domain uniqueness
+  (the first domain auto-becomes primary; a disabled domain is never primary;
+  disabling/removing the primary auto-promotes the oldest enabled replacement or
+  is refused for an ACTIVE Publication with none; new Publications start INACTIVE
+  and cannot be activated without an enabled primary domain);
+  attach a **real** canonical Story to a Publication as a **PublicationStory**
+  (per-Publication slug/headline/summary/why-it-matters/featured/priority/status
+  — canonical Story facts are never edited); and manage **StoryLocalization**
+  rows (one per locale) with localized text, status, translation provenance, and
+  reviewer. Localisation is manual/editorial + import only in Stage 5B (no
+  automated translation). See [`PUBLIC_PORTAL.md`](PUBLIC_PORTAL.md) for the
+  public rendering and locale-resolution rules.
 
 Every meaningful mutation writes an `AdminAuditLog` record (what changed, which
-record, before/after where practical, timestamp, and the acting admin).
+record, before/after where practical, timestamp, and the acting admin). Stage 5B
+adds audited actions for Publication/domain/PublicationStory/StoryLocalization
+create/edit/status changes.
 
 ## Authentication & authorization
 

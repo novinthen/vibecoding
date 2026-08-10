@@ -9,6 +9,12 @@ import type {
   PublicTopicWithCount,
 } from '@/public/types';
 
+import {
+  canonicalDefaultLocale,
+  mergeLocalizedStory,
+  resolveTargetLocale,
+} from './locale';
+
 /**
  * Page-ready public content composition.
  *
@@ -167,25 +173,72 @@ export async function getToolPage(
 export interface StoryPage {
   story: PublicStory;
   articles: PublicArticleListItem[];
+  /** The locale actually rendered — for `<html lang>` / OG locale. */
+  resolvedLocale: string;
+  /** Whether an approved StoryLocalization supplied the content. */
+  localized: boolean;
+  /** Locales with an approved localisation (for SEO alternates / switching). */
+  availableLocales: string[];
 }
 
 /**
- * Resolve a published Story for the active Publication. Returns null when the
- * Publication is the in-code default (no id) or has no such published Story —
- * the current state, since no Stories are published yet. This is the minimal
- * seam later Stage 6/7 work slots into.
+ * Resolve a published Story for the active Publication, locale-aware.
+ *
+ * Returns null when the Publication is the in-code default (no id) or has no
+ * PUBLISHED PublicationStory for the slug. Otherwise applies the documented
+ * locale policy:
+ *
+ *   1. choose the target locale (valid `?locale=` param, else `defaultLocale`);
+ *   2. use an approved (PUBLISHED) StoryLocalization for that locale;
+ *   3. else, if the target differs, the default-locale localisation;
+ *   4. else fall back to the Publication's canonical publication copy.
+ *
+ * Every localisation read is scoped to THIS PublicationStory, so content can
+ * never leak from another Publication.
  */
 export async function getStoryPage(
   db: Db,
   publicationId: string | null,
+  defaultLocale: string,
   slug: string,
+  requestedLocale?: string | string[] | null,
 ): Promise<StoryPage | null> {
   if (!publicationId) return null;
   const repo = new PublicContentRepository(db);
-  const story = await repo.findPublishedStory(publicationId, slug);
-  if (!story) return null;
-  const articles = await repo.listArticlesForStory(story.id);
-  return { story, articles };
+  const base = await repo.findPublishedStory(publicationId, slug);
+  if (!base) return null;
+
+  const canonicalDefault = canonicalDefaultLocale(defaultLocale);
+  const target = resolveTargetLocale(defaultLocale, requestedLocale);
+
+  let localization = await repo.findPublishedLocalization(
+    base.publicationStoryId,
+    target,
+  );
+  let resolvedLocale = target;
+  if (!localization && target !== canonicalDefault) {
+    localization = await repo.findPublishedLocalization(
+      base.publicationStoryId,
+      canonicalDefault,
+    );
+    resolvedLocale = canonicalDefault;
+  }
+  // Falling back to the Publication's canonical publication copy: rendered in
+  // the Publication's default locale.
+  if (!localization) resolvedLocale = canonicalDefault;
+
+  const [articles, availableLocales] = await Promise.all([
+    repo.listArticlesForStory(base.id),
+    repo.listPublishedLocales(base.publicationStoryId),
+  ]);
+
+  return {
+    story: mergeLocalizedStory(base, localization),
+    articles,
+    resolvedLocale,
+    localized: localization !== null,
+    availableLocales,
+  };
 }
 
 export interface SearchResult {
