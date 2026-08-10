@@ -18,15 +18,21 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 5 — Public Portal.**
+**Stage 5B — Multi-Publication Localisation.**
 
-On top of the Stage 3 ingestion engine and Stage 4 admin, this repository now
-serves the first useful **public** vibe-coding news portal from the same Next.js
-application. It is publication-aware, source-transparent, mobile-first, and
-honest about the current data state — it shows what genuinely exists and never
-fabricates Story intelligence, trending, or AI summaries (those are later
-stages). Full details are in
+On top of the Stage 3 ingestion engine, Stage 4 admin, and the Stage 5 public
+portal, this repository now makes the public portal genuinely multi-publication
+and localisation-ready: one canonical intelligence backend powers multiple
+Publications → multiple domains → multiple locales → publication-specific
+editorial presentation. Canonical Article/Story facts stay global and are never
+duplicated; localisation content for one Publication never leaks into another.
+It remains honest about the current data state — no fake Stories are created to
+demonstrate localisation. Full details are in
 [`docs/PUBLIC_PORTAL.md`](docs/PUBLIC_PORTAL.md).
+
+Stage 5B added no schema migrations — Publication, PublicationDomain,
+PublicationStory, and StoryLocalization already exist (migrations `0003`,
+`0009`).
 
 Public routes (all under the shared portal chrome):
 
@@ -38,17 +44,32 @@ Public routes (all under the shared portal chrome):
 - **`/topic`** and **`/topic/[slug]`** — the controlled taxonomy and its feeds.
 - **`/tool`** and **`/tool/[slug]`** — the Entity/Tool foundation (sparse until
   later enrichment stages).
-- **`/story/[slug]`** — the honest Story seam: renders only a real, published
-  Story for the active Publication, and 404s otherwise (no fake Stories).
+- **`/story/[slug]`** — a real, published Story for the active Publication,
+  localisation-aware (see below), and 404s otherwise (no fake Stories).
 - **`/search`** — MVP full-text search over Articles using PostgreSQL only.
 - **`/about`** and **`/sources`** — coverage, source selection, and attribution
   philosophy; the enabled public sources grouped by authority tier.
+- **`/feed.xml`** — a publication-aware Atom feed (that Publication's domain,
+  PUBLISHED Story selection, editorial copy, and default-locale metadata).
 
 **Publication resolution** is `hostname → PublicationDomain → Publication →
 public config`, with a sensible in-code default Publication so the portal renders
 before any Publication is configured — no hardcoded production domain or locale.
-Titles, descriptions, canonical URLs, Open Graph, robots, and the sitemap are all
-publication-aware and derived from the request host.
+Titles, descriptions, canonical URLs, Open Graph, robots, the sitemap, and the
+feed are all publication-aware and derived from the request host.
+
+**Multi-publication localisation (Stage 5B):** authorized admins manage
+Publications, their domains (globally unique, one primary each), the
+PublicationStories that publish a canonical Story with per-Publication
+presentation, and the StoryLocalization rows that carry locale variants
+(manual/editorial + import; no automated translation yet) — all audited. The
+public Story route resolves a deterministic, publication-controlled locale (a
+valid `?locale=` else `default_locale`; never `Accept-Language`) and renders an
+approved localisation, else the default-locale localisation, else the
+Publication's own canonical publication copy — scoped so nothing leaks across
+Publications. `<html lang>`, OG locale, per-Publication canonical URLs, and
+same-origin hreflang alternates follow the rendered locale. See
+[`docs/PUBLIC_PORTAL.md`](docs/PUBLIC_PORTAL.md).
 
 **Safety & attribution:** all feed-derived content is treated as untrusted and
 rendered as escaped text (never raw HTML); outbound URLs are validated before
@@ -69,8 +90,9 @@ without moving to the appropriate roadmap stage:
 
 - GitHub / Hacker News / RSSHub-specific ingestion; arbitrary scraping
 - AI enrichment, summaries, entity extraction, embeddings **generation**
+- **automated AI translation** (Stage 5B localisation is manual/editorial +
+  import only; the automated-translation seam is Stage 6)
 - Story clustering, ranking, trending
-- the Stage 5B multi-publication localisation workflow (translation/adaptation)
 - scheduled production polling
 
 Public page rendering reads from PostgreSQL (the authoritative store) and does
@@ -261,8 +283,10 @@ npm run dev
 Roles are `ADMIN`/`EDITOR` (may mutate) and `VIEWER` (read-only); authorization
 is enforced server-side on every mutation, and every mutation is recorded in
 `admin_audit_log`. Manual ingestion triggered from a Source page reuses the
-Stage 3 safe fetcher unchanged. Full details, including the security model, are
-in [`docs/ADMIN.md`](docs/ADMIN.md).
+Stage 3 safe fetcher unchanged. **Stage 5B** adds `/admin/publications` for
+managing Publications, their domains, PublicationStories, and StoryLocalizations
+(all audited). Full details, including the security model, are in
+[`docs/ADMIN.md`](docs/ADMIN.md).
 
 ## Testing
 
@@ -305,10 +329,11 @@ not be made green by disabling checks.
 ```text
 src/
   app/           Next.js App Router (layout, routes, global styles)
-    (public)/    Stage 5 public portal (home, latest, article, topic, tool,
+    (public)/    Stage 5/5B public portal (home, latest, article, topic, tool,
                  story, search, about, sources) + shared chrome/components
-    admin/       Stage 4 admin control plane
-    sitemap.ts   Publication-aware sitemap
+    admin/       Stage 4 admin + Stage 5B /admin/publications
+    feed.xml/    Publication-aware Atom feed route
+    sitemap.ts   Publication-aware sitemap (incl. published Stories)
     robots.ts    Publication-aware robots directives
   config/        Environment validation and typed configuration
   db/            Connection pool, migration runner, seed, validation

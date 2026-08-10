@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addDomainSchema,
+  createPublicationSchema,
   createSourceSchema,
+  createStoryLocalizationSchema,
   createTopicSchema,
   loginSchema,
   updateArticleStatusSchema,
@@ -92,5 +95,62 @@ describe('admin validation schemas', () => {
     expect(loginSchema.safeParse({ username: '', password: 'b' }).success).toBe(
       false,
     );
+  });
+
+  it('validates and canonicalises a Publication locale/timezone', () => {
+    const ok = createPublicationSchema.safeParse({
+      name: 'Berita',
+      defaultLocale: 'ms-my',
+      timezone: 'Asia/Kuala_Lumpur',
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data.defaultLocale).toBe('ms-MY');
+
+    expect(
+      createPublicationSchema.safeParse({
+        name: 'x',
+        defaultLocale: 'not-a-locale',
+        timezone: 'UTC',
+      }).success,
+    ).toBe(false);
+    expect(
+      createPublicationSchema.safeParse({
+        name: 'x',
+        defaultLocale: 'en',
+        timezone: 'Mars/Phobos',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates and lowercases a bare domain; rejects scheme/port/path', () => {
+    const ok = addDomainSchema.safeParse({ domain: 'News.Example.com' });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data.domain).toBe('news.example.com');
+    for (const bad of [
+      'https://news.example.com',
+      'news.example.com:3000',
+      'news.example.com/path',
+      'no-dot',
+    ]) {
+      expect(addDomainSchema.safeParse({ domain: bad }).success).toBe(false);
+    }
+  });
+
+  it('accepts a StoryLocalization and normalises optional provenance', () => {
+    const parsed = createStoryLocalizationSchema.parse({
+      locale: 'ZH-hans',
+      headline: 'x',
+      summary: '',
+      translationSource: '',
+    });
+    expect(parsed.locale).toBe('zh-Hans');
+    expect(parsed.summary).toBeNull();
+    expect(parsed.translationSource).toBeNull();
+    expect(
+      createStoryLocalizationSchema.safeParse({
+        locale: 'ms',
+        translationSource: 'ROBOT',
+      }).success,
+    ).toBe(false);
   });
 });

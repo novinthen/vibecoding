@@ -62,6 +62,39 @@ describe('buildMetadata', () => {
     expect(robots.index).toBe(true);
     expect(meta.description).toBe(config.description);
   });
+
+  it('overrides OG locale for a localisation-aware page', () => {
+    const meta = buildMetadata({
+      config,
+      baseUrl,
+      path: '/story/x?locale=ms',
+      locale: 'ms',
+    });
+    expect(meta.openGraph?.locale).toBe('ms');
+    // Absent an override, the OG locale is the publication default.
+    const dflt = buildMetadata({ config, baseUrl, path: '/story/x' });
+    expect(dflt.openGraph?.locale).toBe(config.locale);
+  });
+
+  it('emits hreflang alternates only within the same publication origin', () => {
+    const meta = buildMetadata({
+      config,
+      baseUrl,
+      path: '/story/x?locale=ms',
+      locale: 'ms',
+      languageAlternates: {
+        en: 'https://news.example.com/story/x',
+        ms: 'https://news.example.com/story/x?locale=ms',
+      },
+    });
+    const languages = meta.alternates?.languages as Record<string, string>;
+    expect(languages.en).toBe('https://news.example.com/story/x');
+    expect(languages.ms).toBe('https://news.example.com/story/x?locale=ms');
+    // Every alternate stays on this publication's own origin (no cross-domain).
+    for (const url of Object.values(languages)) {
+      expect(url.startsWith('https://news.example.com/')).toBe(true);
+    }
+  });
 });
 
 describe('jsonLdScriptContent', () => {

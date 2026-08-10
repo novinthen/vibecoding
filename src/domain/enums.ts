@@ -150,3 +150,17 @@ export const LOCALIZATION_STATUSES = [
 ] as const;
 export const localizationStatusSchema = z.enum(LOCALIZATION_STATUSES);
 export type LocalizationStatus = z.infer<typeof localizationStatusSchema>;
+
+/**
+ * Provenance of a StoryLocalization's text. Mirrors the CHECK constraint on
+ * story_localizations.translation_source. HUMAN = editorially authored/translated;
+ * MACHINE = imported machine translation (no automated provider runs in Stage 5B);
+ * MACHINE_REVIEWED = machine output a human has reviewed.
+ */
+export const TRANSLATION_SOURCES = [
+  'HUMAN',
+  'MACHINE',
+  'MACHINE_REVIEWED',
+] as const;
+export const translationSourceSchema = z.enum(TRANSLATION_SOURCES);
+export type TranslationSource = z.infer<typeof translationSourceSchema>;

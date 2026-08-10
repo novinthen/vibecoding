@@ -1,4 +1,12 @@
-import type { ArticleRow, SourceRow, TopicRow } from '@/domain/types';
+import type {
+  ArticleRow,
+  PublicationDomainRow,
+  PublicationRow,
+  PublicationStoryRow,
+  SourceRow,
+  StoryLocalizationRow,
+  TopicRow,
+} from '@/domain/types';
 
 /**
  * Compact, audit-friendly projections of domain rows.
@@ -42,5 +50,74 @@ export function auditTopicView(row: TopicRow): Record<string, unknown> {
     description: row.description,
     parent_id: row.parent_id,
     enabled: row.enabled,
+  };
+}
+
+export function auditPublicationView(
+  row: PublicationRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    default_locale: row.default_locale,
+    timezone: row.timezone,
+    status: row.status,
+    editorial_profile: row.editorial_profile,
+    branding: row.branding,
+    seo_settings: row.seo_settings,
+  };
+}
+
+export function auditDomainView(
+  row: PublicationDomainRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    publication_id: row.publication_id,
+    domain: row.domain,
+    is_primary: row.is_primary,
+    enabled: row.enabled,
+  };
+}
+
+/**
+ * PublicationStory audit view — presentation only. Deliberately excludes any
+ * canonical Story fact; it records the per-Publication editorial projection so a
+ * change is auditable without implying canonical facts were touched.
+ */
+export function auditPublicationStoryView(
+  row: PublicationStoryRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    publication_id: row.publication_id,
+    story_id: row.story_id,
+    status: row.status,
+    slug: row.slug,
+    headline: row.headline,
+    published_summary: row.published_summary,
+    published_why_it_matters: row.published_why_it_matters,
+    featured: row.featured,
+    editorial_priority: row.editorial_priority,
+    published_at: row.published_at,
+  };
+}
+
+export function auditLocalizationView(
+  row: StoryLocalizationRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    publication_story_id: row.publication_story_id,
+    locale: row.locale,
+    headline: row.headline,
+    summary: row.summary,
+    why_it_matters: row.why_it_matters,
+    translation_source: row.translation_source,
+    model_provider: row.model_provider,
+    model_name: row.model_name,
+    status: row.status,
+    reviewed_by: row.reviewed_by,
   };
 }

@@ -27,6 +27,19 @@ export interface BuildMetadataInput {
   index?: boolean;
   /** Open Graph type; defaults to `website`. */
   ogType?: 'website' | 'article';
+  /**
+   * Locale actually rendered (BCP-47), overriding the Publication default for
+   * this page's `<html lang>`-equivalent metadata and OG locale. Used by
+   * localisation-aware routes so a Malay Story page advertises `ms`, not the
+   * Publication default.
+   */
+  locale?: string;
+  /**
+   * hreflang alternates: locale → absolute URL. Emitted as
+   * `alternates.languages` so search engines can discover the localised
+   * variants of the same Story within THIS Publication (never cross-domain).
+   */
+  languageAlternates?: Record<string, string>;
 }
 
 /** Join `baseUrl` and `path` into a clean absolute canonical URL. */
@@ -55,11 +68,16 @@ export function buildMetadata(input: BuildMetadataInput): Metadata {
     ? `${input.title} — ${config.name}`
     : config.name;
   const url = canonicalUrl(baseUrl, path);
+  const locale = input.locale ?? config.locale;
+  const languages =
+    input.languageAlternates && Object.keys(input.languageAlternates).length > 0
+      ? input.languageAlternates
+      : undefined;
 
   return {
     title: fullTitle,
     description,
-    alternates: { canonical: url },
+    alternates: { canonical: url, languages },
     robots: {
       index,
       follow: true,
@@ -71,7 +89,7 @@ export function buildMetadata(input: BuildMetadataInput): Metadata {
       title: fullTitle,
       description,
       url,
-      locale: config.locale,
+      locale,
     },
     twitter: {
       card: 'summary',

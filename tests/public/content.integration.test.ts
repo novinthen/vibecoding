@@ -398,14 +398,14 @@ d('public content data access', () => {
   it('Story seam: null for the default publication and for missing slugs', async () => {
     await inRollbackTx(async (tx) => {
       // Default (in-code) publication has no id → no Stories are resolvable.
-      expect(await getStoryPage(tx, null, 'anything')).toBeNull();
+      expect(await getStoryPage(tx, null, 'en', 'anything')).toBeNull();
 
       // A real publication with no published Story also resolves to null.
       const pub = await tx.query<{ id: string }>(
         `INSERT INTO publications (name, slug) VALUES ('S','s') RETURNING id`,
       );
       expect(
-        await getStoryPage(tx, pub.rows[0]!.id, 'not-published'),
+        await getStoryPage(tx, pub.rows[0]!.id, 'en', 'not-published'),
       ).toBeNull();
     });
   });
@@ -436,7 +436,7 @@ d('public content data access', () => {
         [storyId, articleId],
       );
 
-      const page = await getStoryPage(tx, pubId, 'launch-event');
+      const page = await getStoryPage(tx, pubId, 'en', 'launch-event');
       expect(page?.story.title).toBe('Editorial Headline');
       expect(page?.story.summary).toBe('A real editorial summary.');
       expect(page?.articles.map((a) => a.title)).toEqual(['Member coverage']);

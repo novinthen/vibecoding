@@ -3,8 +3,13 @@ import { z } from 'zod';
 import {
   articleStatusSchema,
   authorityTierSchema,
+  localizationStatusSchema,
+  publicationStatusSchema,
+  publicationStoryStatusSchema,
   sourceTypeSchema,
+  translationSourceSchema,
 } from '@/domain/enums';
+import { canonicalizeLocale } from '@/domain/locale';
 
 /**
  * Server-side validation for admin mutations (Stage 4).
@@ -144,4 +149,154 @@ export type UpdateTopicValues = z.infer<typeof updateTopicSchema>;
 export const loginSchema = z.object({
   username: z.string().min(1).max(200),
   password: z.string().min(1).max(1024),
+});
+
+// ---------------------------------------------------------------------------
+// Stage 5B — Publications, domains, publication stories, localisations.
+// ---------------------------------------------------------------------------
+
+/** A BCP-47-ish locale, normalised to canonical case (e.g. `en`, `en-US`). */
+const localeSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(35)
+  .transform((value, ctx) => {
+    const canonical = canonicalizeLocale(value);
+    if (!canonical) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Must be a valid locale like "en", "ms", "en-US", or "zh-Hans".',
+      });
+      return z.NEVER;
+    }
+    return canonical;
+  });
+
+/** An IANA time zone, validated against the runtime's zone database. */
+const timezoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .refine((value) => {
+    try {
+      // Throws a RangeError for an unknown/ill-formed zone.
+      new Intl.DateTimeFormat('en-US', { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Must be a valid IANA time zone, e.g. "UTC" or "Asia/Kuala_Lumpur".');
+
+/**
+ * A bare hostname (no scheme, port, or path). Lowercased; matched exactly
+ * against publication_domains, so it must be the real served host. `localhost`
+ * is permitted for local development.
+ */
+const domainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(253)
+  .refine(
+    (value) =>
+      value === 'localhost' ||
+      /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/.test(value),
+    'Must be a bare hostname like "news.example.com" (no scheme, port, or path).',
+  );
+
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => (value === '' ? null : value))
+    .nullable()
+    .optional();
+
+export const createPublicationSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  slug: slugSchema.optional(),
+  defaultLocale: localeSchema,
+  timezone: timezoneSchema,
+  brandingName: optionalText(200),
+  tagline: optionalText(300),
+  seoDescription: optionalText(500),
+  positioning: optionalText(500),
+  audience: optionalText(300),
+});
+export type CreatePublicationValues = z.infer<typeof createPublicationSchema>;
+
+/** Edit form: slug is immutable identity and not accepted here. */
+export const updatePublicationSchema = createPublicationSchema.omit({
+  slug: true,
+});
+export type UpdatePublicationValues = z.infer<typeof updatePublicationSchema>;
+
+export const setPublicationStatusSchema = z.object({
+  status: publicationStatusSchema,
+});
+
+export const addDomainSchema = z.object({
+  domain: domainSchema,
+  isPrimary: z.boolean().optional().default(false),
+});
+export type AddDomainValues = z.infer<typeof addDomainSchema>;
+
+export const createPublicationStorySchema = z.object({
+  storyId: z.string().uuid(),
+  slug: slugSchema,
+  headline: optionalText(300),
+  publishedSummary: optionalText(2000),
+  publishedWhyItMatters: optionalText(2000),
+  featured: z.boolean().optional().default(false),
+  editorialPriority: z.coerce.number().int().min(-1000).max(1000).default(0),
+});
+export type CreatePublicationStoryValues = z.infer<
+  typeof createPublicationStorySchema
+>;
+
+/** Edit form: the canonical Story link is immutable; only presentation changes. */
+export const updatePublicationStorySchema = createPublicationStorySchema.omit({
+  storyId: true,
+});
+export type UpdatePublicationStoryValues = z.infer<
+  typeof updatePublicationStorySchema
+>;
+
+export const setPublicationStoryStatusSchema = z.object({
+  status: publicationStoryStatusSchema,
+});
+
+const optionalTranslationSource = z
+  .union([translationSourceSchema, z.literal('')])
+  .optional()
+  .transform((value) => (value === '' || value === undefined ? null : value));
+
+export const createStoryLocalizationSchema = z.object({
+  locale: localeSchema,
+  headline: optionalText(300),
+  summary: optionalText(2000),
+  whyItMatters: optionalText(2000),
+  translationSource: optionalTranslationSource,
+  modelProvider: optionalText(100),
+  modelName: optionalText(100),
+});
+export type CreateStoryLocalizationValues = z.infer<
+  typeof createStoryLocalizationSchema
+>;
+
+/** Edit form: locale is the localisation's identity and is immutable. */
+export const updateStoryLocalizationSchema = createStoryLocalizationSchema.omit(
+  { locale: true },
+);
+export type UpdateStoryLocalizationValues = z.infer<
+  typeof updateStoryLocalizationSchema
+>;
+
+export const setStoryLocalizationStatusSchema = z.object({
+  status: localizationStatusSchema,
 });
