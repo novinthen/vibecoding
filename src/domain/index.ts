@@ -8,6 +8,11 @@ export * from './enums';
 export * from './slug';
 export * from './topics';
 export * from './types';
+export {
+  NON_PUBLIC_ARTICLE_STATUSES,
+  isPubliclyVisibleArticle,
+  publicArticleStatusSql,
+} from './article-visibility';
 export { TopicRepository } from './repositories/topic-repository';
 export {
   SourceRepository,
@@ -38,3 +43,8 @@ export {
   EntityRepository,
   type CreateEntityInput,
 } from './repositories/entity-repository';
+export { PublicationRepository } from './repositories/publication-repository';
+export {
+  PublicContentRepository,
+  type PublicArticleQuery,
+} from './repositories/public-content-repository';

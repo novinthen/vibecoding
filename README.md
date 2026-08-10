@@ -18,33 +18,45 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 4 — Admin & Editorial Operations.**
+**Stage 5 — Public Portal.**
 
-On top of the Stage 3 ingestion engine, this repository now contains a secure
-admin/editorial control plane at `/admin` — the minimum needed to operate and
-inspect the aggregator. It is part of the same Next.js application (a modular
-monolith, not a separate service):
+On top of the Stage 3 ingestion engine and Stage 4 admin, this repository now
+serves the first useful **public** vibe-coding news portal from the same Next.js
+application. It is publication-aware, source-transparent, mobile-first, and
+honest about the current data state — it shows what genuinely exists and never
+fabricates Story intelligence, trending, or AI summaries (those are later
+stages). Full details are in
+[`docs/PUBLIC_PORTAL.md`](docs/PUBLIC_PORTAL.md).
 
-- **Overview** — source health counts, recent failures/fetches, recently
-  ingested Articles, and Sources needing attention.
-- **Sources** — list, inspect, create, edit permitted fields, enable/disable,
-  inspect health / failures / last success / conditional-fetch state, and
-  **manually trigger ingestion** (delegated to the Stage 3 engine — no
-  duplicated logic).
-- **Fetches** — recent `SourceFetch` attempts across all Sources, with status
-  filtering and error details.
-- **Articles** — search/filter (Source, status, text) with date-ordered
-  pagination and a read-only detail view; the only Article mutation is a
-  lifecycle status change (Article ≠ Story; source facts stay read-only).
-- **Topics** — controlled taxonomy: add sub-Topics and enable/disable.
+Public routes (all under the shared portal chrome):
 
-Access is gated by an env-configured admin roster (scrypt password hashes) and a
-stateless HMAC-signed httpOnly session cookie; roles are `ADMIN`/`EDITOR`/
-`VIEWER`, and authorization is enforced **server-side** on every mutation. Every
-meaningful mutation writes an `AdminAuditLog` record. See
-[`docs/ADMIN.md`](docs/ADMIN.md) and [`src/admin`](src/admin).
+- **`/`** — homepage: Latest, primary-source updates, and topic navigation.
+- **`/latest`** — chronological, paginated feed with source and timestamp.
+- **`/article/[id]`** — the current factual public unit: original title, source,
+  timestamp, safe excerpt, topic, and a prominent outbound link to the original
+  publisher (it is never presented as an AI-written Story).
+- **`/topic`** and **`/topic/[slug]`** — the controlled taxonomy and its feeds.
+- **`/tool`** and **`/tool/[slug]`** — the Entity/Tool foundation (sparse until
+  later enrichment stages).
+- **`/story/[slug]`** — the honest Story seam: renders only a real, published
+  Story for the active Publication, and 404s otherwise (no fake Stories).
+- **`/search`** — MVP full-text search over Articles using PostgreSQL only.
+- **`/about`** and **`/sources`** — coverage, source selection, and attribution
+  philosophy; the enabled public sources grouped by authority tier.
 
-The prior Stage 3 ingestion pipeline is unchanged:
+**Publication resolution** is `hostname → PublicationDomain → Publication →
+public config`, with a sensible in-code default Publication so the portal renders
+before any Publication is configured — no hardcoded production domain or locale.
+Titles, descriptions, canonical URLs, Open Graph, robots, and the sitemap are all
+publication-aware and derived from the request host.
+
+**Safety & attribution:** all feed-derived content is treated as untrusted and
+rendered as escaped text (never raw HTML); outbound URLs are validated before
+becoming links; and every item preserves its source name, original timestamp, and
+canonical URL with clear outbound access. No internal hashes, DB errors, admin
+metadata, or secrets are exposed publicly.
+
+The Stage 3 ingestion pipeline and Stage 4 admin are unchanged:
 
 ```text
 Source → fetch → parse → normalize → canonicalize URL
@@ -58,12 +70,12 @@ without moving to the appropriate roadmap stage:
 - GitHub / Hacker News / RSSHub-specific ingestion; arbitrary scraping
 - AI enrichment, summaries, entity extraction, embeddings **generation**
 - Story clustering, ranking, trending
-- the public product UI and multi-publication rendering
+- the Stage 5B multi-publication localisation workflow (translation/adaptation)
 - scheduled production polling
 
-The home route (`/`) is a **foundation placeholder**, not the product homepage.
-Public page rendering does **not** depend on the database or any live AI call.
-The `/admin` surface is the only stateful UI, and it is not publicly writable.
+Public page rendering reads from PostgreSQL (the authoritative store) and does
+**not** depend on any live AI call. The `/admin` surface remains the only
+publicly-writable-gated UI, and it is not publicly writable.
 
 Scope is governed by [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md). Do not implement later stages without
@@ -261,9 +273,11 @@ files live in `tests/` (and co-located `*.test.ts[x]` files are also picked up).
 npm test
 ```
 
-Domain, environment, and migration-integrity tests run with no external
-dependencies. The database **integration** tests
-([`tests/db/schema.integration.test.ts`](tests/db/schema.integration.test.ts))
+Domain, environment, migration-integrity, publication-resolution, visibility,
+metadata, formatting, and safe-rendering tests run with no external
+dependencies. The database **integration** tests (schema, admin services, and
+the public content/query reads in
+[`tests/public/content.integration.test.ts`](tests/public/content.integration.test.ts))
 are **skipped automatically unless `DATABASE_URL` is set**, so CI stays green
 without a database while local/dev runs get full coverage. Each integration test
 runs inside a transaction that is always rolled back, leaving the database
@@ -291,11 +305,20 @@ not be made green by disabling checks.
 ```text
 src/
   app/           Next.js App Router (layout, routes, global styles)
+    (public)/    Stage 5 public portal (home, latest, article, topic, tool,
+                 story, search, about, sources) + shared chrome/components
+    admin/       Stage 4 admin control plane
+    sitemap.ts   Publication-aware sitemap
+    robots.ts    Publication-aware robots directives
   config/        Environment validation and typed configuration
   db/            Connection pool, migration runner, seed, validation
     migrations/  Ordered .sql migration files (source of truth for the schema)
   domain/        Controlled vocabularies, row types, and repositories
-    repositories/  Data-access boundary (Source/Article/Story/Entity/Topic)
+    repositories/  Data-access boundary (Source/Article/Story/Entity/Topic/
+                   Publication/public reads)
+  lib/           Shared framework-agnostic helpers (e.g. safe-url)
+  public/        Public-portal application layer (publication resolution,
+                 metadata, content composition, formatting)
   ingestion/     Stage 3 ingestion engine
     adapters/    Source Adapter contract + RSS/Atom adapter
     http/        Safe fetcher, SSRF guard, error classification

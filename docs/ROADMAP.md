@@ -79,7 +79,7 @@ See: `CURRENT_STAGE.md`
 
 ## Stage 3 — News Ingestion Engine
 
-**Status:** CURRENT
+**Status:** COMPLETE
 
 Goal:
 
@@ -110,6 +110,8 @@ After representative-source validation passes, expand progressively until **30+ 
 
 ## Stage 4 — Admin & Editorial Operations
 
+**Status:** COMPLETE
+
 Goal:
 
 Make the aggregation system operable by humans.
@@ -128,6 +130,8 @@ Expected work:
 ---
 
 ## Stage 5 — Public Portal
+
+**Status:** CURRENT
 
 Goal:
 
