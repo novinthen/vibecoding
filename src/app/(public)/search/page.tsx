@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { parsePage, search } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { buildMetadata } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 
 import {
   ArticleList,
@@ -23,7 +23,7 @@ function firstParam(value: string | string[] | undefined): string {
 }
 
 export async function generateMetadata(): Promise<Metadata> {
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   // Search-result pages carry no durable content; keep them out of the index.
   return buildMetadata({
     config,
@@ -40,6 +40,7 @@ export default async function SearchPage({
 }: {
   readonly searchParams: SearchParams;
 }) {
+  await requireServedPublication();
   const resolved = await searchParams;
   const query = firstParam(resolved.q).trim();
   const page = parsePage(resolved.page);

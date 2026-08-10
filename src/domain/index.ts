@@ -9,7 +9,7 @@ export * from './slug';
 export * from './topics';
 export * from './types';
 export {
-  NON_PUBLIC_ARTICLE_STATUSES,
+  PUBLIC_ARTICLE_STATUSES,
   isPubliclyVisibleArticle,
   publicArticleStatusSql,
 } from './article-visibility';

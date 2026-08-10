@@ -77,6 +77,100 @@ export function normalizeHostname(
   return withoutPort || null;
 }
 
+/**
+ * The outcome of resolving a request to a Publication.
+ *
+ * - `database`: the host matched an ENABLED PublicationDomain on an ACTIVE
+ *   Publication. The canonical base uses that validated host — never an
+ *   unvalidated request header.
+ * - `default`: no Publication matched, but the environment (local/preview)
+ *   permits the in-code default Publication so the portal is usable before any
+ *   Publication is configured.
+ * - `unresolved`: production received a host that does not resolve to a
+ *   Publication. The portal fails closed (404/unavailable); no default is served
+ *   and no canonical/OG URL is derived from the unrecognised host.
+ */
+export type PublicationResolution =
+  | {
+      status: 'database';
+      config: PublicationConfig;
+      baseUrl: string;
+      host: string;
+    }
+  | {
+      status: 'default';
+      config: PublicationConfig;
+      baseUrl: string;
+      host: string | null;
+    }
+  | { status: 'unresolved'; host: string | null };
+
+/** A resolution that is actually served (database or default). */
+export type ServedPublication = Extract<
+  PublicationResolution,
+  { status: 'database' | 'default' }
+>;
+
+/** http for local development hosts; https everywhere else. Never hardcodes a domain. */
+export function protocolForHost(host: string): string {
+  const bare = host.replace(/:\d+$/, '');
+  if (bare === 'localhost' || bare === '127.0.0.1' || bare.endsWith('.local')) {
+    return 'http';
+  }
+  return 'https';
+}
+
+function baseUrlForHost(host: string): string {
+  return `${protocolForHost(host)}://${host}`;
+}
+
+/**
+ * Pure resolution decision, separated from request/DB access so every branch is
+ * directly unit-testable.
+ *
+ * @param host    the raw request host (already read from headers), or null.
+ * @param row     the PublicationDomain→Publication lookup result (already run by
+ *                the caller when a database is configured), or null.
+ * @param isProduction  whether this is a production deployment (APP_ENV).
+ */
+export function resolvePublicationContext(input: {
+  host: string | null;
+  row: PublicationRow | null;
+  isProduction: boolean;
+}): PublicationResolution {
+  const { host, row, isProduction } = input;
+  const normalized = normalizeHostname(host);
+
+  if (row) {
+    // The host passed PublicationDomain resolution. Build the canonical base
+    // from the VALIDATED normalised domain, not the raw header, so an untrusted
+    // Host/X-Forwarded-Host value can never poison canonical metadata.
+    const canonicalHost = normalized ?? row.slug;
+    return {
+      status: 'database',
+      config: resolvePublicationConfig(row),
+      baseUrl: baseUrlForHost(canonicalHost),
+      host: canonicalHost,
+    };
+  }
+
+  // No Publication resolved for this host.
+  if (isProduction) {
+    // Fail closed: do not serve the default Publication, and do not derive a
+    // canonical/OG URL from the unrecognised host.
+    return { status: 'unresolved', host };
+  }
+
+  // Local/preview: the in-code default keeps development practical.
+  const baseUrl = host ? baseUrlForHost(host) : 'http://localhost:3000';
+  return {
+    status: 'default',
+    config: defaultPublicationConfig(),
+    baseUrl,
+    host,
+  };
+}
+
 function readString(
   obj: Record<string, unknown> | null | undefined,
   key: string,

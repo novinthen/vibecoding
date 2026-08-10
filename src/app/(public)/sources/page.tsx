@@ -4,7 +4,7 @@ import type { AuthorityTier } from '@/domain/enums';
 import { getSources } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { buildMetadata } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 import type { PublicSource } from '@/public/types';
 
 import {
@@ -35,7 +35,7 @@ const TIER_LABEL: Record<AuthorityTier, string> = {
 };
 
 export async function generateMetadata(): Promise<Metadata> {
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   return buildMetadata({
     config,
     baseUrl,
@@ -46,6 +46,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function SourcesPage() {
+  await requireServedPublication();
   return (
     <>
       <PageHeading

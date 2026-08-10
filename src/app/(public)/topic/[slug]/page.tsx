@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { getTopicPage, parsePage, type TopicPage } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { buildMetadata } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 
 import { ArticleList, PageHeading, Pagination } from '../../_components/ui';
 
@@ -24,7 +24,7 @@ export async function generateMetadata({
   readonly params: Params;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   const data = await load(slug, 1);
   if (!data) {
     return buildMetadata({
@@ -53,6 +53,7 @@ export default async function TopicPageRoute({
   readonly params: Params;
   readonly searchParams: SearchParams;
 }) {
+  await requireServedPublication();
   const { slug } = await params;
   const page = parsePage((await searchParams).page);
   const data = await load(slug, page);

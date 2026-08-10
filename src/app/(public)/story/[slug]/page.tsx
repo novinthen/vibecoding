@@ -6,7 +6,7 @@ import { getStoryPage, type StoryPage } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { clampExcerpt, formatUtc } from '@/public/format';
 import { buildMetadata } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 
 import { ArticleList, PageHeading } from '../../_components/ui';
 
@@ -38,7 +38,7 @@ export async function generateMetadata({
   readonly params: Params;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   const data = await load(config.id, slug);
   if (!data) {
     return buildMetadata({
@@ -67,7 +67,7 @@ export default async function StoryPageRoute({
   readonly params: Params;
 }) {
   const { slug } = await params;
-  const { config } = await getActivePublication();
+  const { config } = await requireServedPublication();
   const data = await load(config.id, slug);
   if (!data) notFound();
 

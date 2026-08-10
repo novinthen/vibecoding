@@ -12,13 +12,20 @@ current data state, and the security/attribution safeguards.
 AI relevance classification (Stage 6) and Story clustering (Stage 7) do not exist
 yet, so the portal deliberately does **not** invent them:
 
-- **Articles are the current factual public unit.** Ingested Articles land in
-  `DISCOVERED`; there is no meaningful "PUBLISHED" gate yet. Rather than fake a
-  curated feed, the portal shows genuinely ingested Articles and hides exactly
-  the three states that must never be public: `HIDDEN` (editorially removed),
-  `DUPLICATE` (exact-dedup), and `FAILED` (bad ingestion). This rule lives once,
-  in `src/domain/article-visibility.ts`, as both a TypeScript predicate and a SQL
-  fragment that agree by construction.
+- **Articles are the current factual public unit, gated by explicit publishing.**
+  An Article is publicly visible **only** when its status is `PUBLISHED`. Every
+  pre-publication lifecycle state (`DISCOVERED`, `NORMALIZED`, `QUEUED`,
+  `ENRICHED`, `CLUSTERED`) and every excluded state (`HIDDEN`, `DUPLICATE`,
+  `FAILED`) is non-public. Stage 3 ingestion continues to create Articles in its
+  existing initial state (it does **not** auto-publish); Stage 4's editorial
+  status control is the current manual publishing gate. Later stages (6/7) may
+  promote suitable Articles/Stories into `PUBLISHED`, but Stage 5 does not
+  anticipate that by exposing pre-publication records. The rule lives once, in
+  `src/domain/article-visibility.ts`, as both a TypeScript predicate
+  (`isPubliclyVisibleArticle`) and a SQL fragment (`publicArticleStatusSql`,
+  emitting `status IN ('PUBLISHED')`) that agree by construction, and it is
+  applied by every public Article query — home, Latest, `/article/[id]` (a
+  non-`PUBLISHED` id 404s), Topic pages, Search, and Source listings.
 - **No Trending/Important/AI summaries.** These modules are omitted, not faked.
 - **The Story route is a real seam, not fake data.** `/story/[slug]` renders only
   a genuinely published `PublicationStory` for the active Publication and 404s
@@ -29,19 +36,42 @@ yet, so the portal deliberately does **not** invent them:
 
 ## Publication resolution
 
-Resolution is `hostname → PublicationDomain → Publication → public config`:
+Resolution is `hostname → enabled PublicationDomain → ACTIVE Publication → public
+config`:
 
 1. `getActivePublication()` (`src/public/request.ts`) reads the request host
    (`X-Forwarded-Host`, then `Host`), normalises it (lowercase, strip port), and
    looks it up via `PublicationRepository.findByDomain` — matching an **enabled**
    domain to an **ACTIVE** Publication.
-2. The row is projected to a small render-facing `PublicationConfig`
-   (`resolvePublicationConfig`), reading branding/SEO overrides from the
-   Publication's JSONB columns.
-3. When no database is configured, no host is present, or no Publication maps to
-   the host, it falls back to an **in-code default Publication** (site name from
-   `NEXT_PUBLIC_APP_NAME`, locale `en`). No production domain, brand, or locale is
-   hardcoded, and the canonical URL base is derived from the request host.
+2. The pure `resolvePublicationContext` decides the outcome, returning one of:
+   - **`database`** — the host resolved. The row is projected to a small
+     render-facing `PublicationConfig` (`resolvePublicationConfig`), and the
+     canonical base URL is built from the **validated, normalised domain** — never
+     from the raw request header.
+   - **`default`** — no Publication matched, but this is **local/preview**
+     (`APP_ENV` ≠ `production`), so the in-code **default Publication** (site name
+     from `NEXT_PUBLIC_APP_NAME`, locale `en`) keeps development practical.
+   - **`unresolved`** — this is **production** and the host did not resolve. The
+     portal **fails closed**.
+
+### Fail closed in production
+
+Production must not silently serve an arbitrary/unconfigured hostname as a valid
+Publication. When `APP_ENV=production` and the request host does not resolve to an
+enabled `PublicationDomain` on an `ACTIVE` Publication:
+
+- the default Publication is **not** served;
+- **no** canonical/OG URL is derived from the unrecognised host;
+- public pages return **404** (`requireServedPublication()` calls `notFound()`),
+  `robots.txt` disallows everything and advertises no host, and the sitemap is
+  empty.
+
+Because the canonical base for a resolved Publication is built from the validated
+domain (not the `Host`/`X-Forwarded-Host` header), and an unresolved production
+host is rejected outright, an untrusted header value can never poison canonical
+metadata. `APP_ENV` (the deployment target, distinct from `NODE_ENV`) is the
+signal: `preview` is treated like development so previews stay usable. No
+production domain is hardcoded anywhere.
 
 The full Stage 5B localisation workflow (StoryLocalization editing, per-publication
 RSS, translation review, multiple deployed sites) is intentionally **out of
@@ -81,10 +111,12 @@ never leak to a public surface.
 | `/about`          | Coverage, source selection, attribution philosophy               |
 | `/sources`        | Enabled public sources grouped by authority tier                 |
 
-All data routes are `force-dynamic` (they read the request host and live data)
-and degrade to an honest "unavailable" state when no database is configured.
-`Topic`, `Article`, `Tool`, and `Story` routes return **404** for unknown
-slugs/ids (a non-UUID article id 404s without hitting the database).
+All data routes are `force-dynamic` (they read the request host and live data).
+In local/preview they degrade to an honest "unavailable" state when no database
+is configured; in production an unresolved host fails closed with a 404 (see
+above). `Topic`, `Article`, `Tool`, and `Story` routes return **404** for unknown
+slugs/ids (a non-UUID article id 404s without hitting the database), and a
+direct `/article/[id]` request for a non-`PUBLISHED` Article also returns 404.
 
 ## Search
 
@@ -125,7 +157,9 @@ of the `<script>` element.
 ## Tests
 
 - `tests/public/publication.test.ts` — hostname normalisation and config projection.
-- `tests/public/visibility.test.ts` — the visibility predicate ⇔ SQL agreement.
+- `tests/public/resolution.test.ts` — production fail-closed vs. dev fallback, and
+  canonical base built only from a validated host (no header poisoning).
+- `tests/public/visibility.test.ts` — PUBLISHED-only rule; predicate ⇔ SQL agreement.
 - `tests/public/metadata.test.ts` — canonical URLs, robots noindex, JSON-LD escaping.
 - `tests/public/format.test.ts` — deterministic date/excerpt formatting.
 - `tests/public/safe-url.test.ts` — outbound-URL safety.

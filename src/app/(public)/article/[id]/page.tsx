@@ -7,7 +7,7 @@ import { getArticle } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { clampExcerpt, formatUtc, isoOrNull } from '@/public/format';
 import { buildMetadata, jsonLdScriptContent } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 import type { PublicArticleDetail } from '@/public/types';
 
 import { AuthorityBadge, OutboundLink } from '../../_components/ui';
@@ -27,7 +27,7 @@ export async function generateMetadata({
   readonly params: Params;
 }): Promise<Metadata> {
   const { id } = await params;
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   const article = await loadArticle(id);
   if (!article) {
     return buildMetadata({
@@ -55,6 +55,7 @@ export default async function ArticlePage({
 }: {
   readonly params: Params;
 }) {
+  await requireServedPublication();
   const { id } = await params;
   const article = await loadArticle(id);
   if (!article) notFound();

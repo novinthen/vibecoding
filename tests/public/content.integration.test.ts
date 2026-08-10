@@ -3,11 +3,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { closePool, getPool, type Db } from '@/db/client';
 import { PublicationRepository, PublicContentRepository } from '@/domain';
 import {
+  getArticle,
   getLatest,
   getStoryPage,
   getTopicPage,
   search,
 } from '@/public/content';
+import { ARTICLE_STATUSES } from '@/domain/enums';
 import { resolvePublicationConfig } from '@/public/publication';
 
 /**
@@ -82,7 +84,9 @@ async function createArticle(
       opts.hash,
       opts.title,
       opts.excerpt ?? null,
-      opts.status ?? 'DISCOVERED',
+      // Public visibility requires PUBLISHED; helper defaults to it so a test
+      // that wants a *visible* Article does not have to restate the status.
+      opts.status ?? 'PUBLISHED',
     ],
   );
   return r.rows[0]!.id;
@@ -111,11 +115,12 @@ d('public content data access', () => {
     });
   });
 
-  it('does not resolve a disabled domain or an unknown host', async () => {
+  it('does not resolve a disabled domain, an inactive Publication, or an unknown host', async () => {
     await inRollbackTx(async (tx) => {
       const pub = await tx.query<{ id: string }>(
         `INSERT INTO publications (name, slug) VALUES ('P', 'p') RETURNING id`,
       );
+      // Enabled domain, but disabled → must not resolve.
       await tx.query(
         `INSERT INTO publication_domains (publication_id, domain, enabled)
          VALUES ($1, 'disabled.example.com', false)`,
@@ -124,6 +129,17 @@ d('public content data access', () => {
       const repo = new PublicationRepository(tx);
       expect(await repo.findByDomain('disabled.example.com')).toBeNull();
       expect(await repo.findByDomain('nobody.example.com')).toBeNull();
+
+      // Enabled domain on an INACTIVE Publication → must not resolve either.
+      const inactive = await tx.query<{ id: string }>(
+        `INSERT INTO publications (name, slug, status) VALUES ('Inactive','inactive','INACTIVE') RETURNING id`,
+      );
+      await tx.query(
+        `INSERT INTO publication_domains (publication_id, domain, enabled)
+         VALUES ($1, 'inactive.example.com', true)`,
+        [inactive.rows[0]!.id],
+      );
+      expect(await repo.findByDomain('inactive.example.com')).toBeNull();
     });
   });
 
@@ -169,6 +185,64 @@ d('public content data access', () => {
         'Detail visible',
       );
       expect(await repo.findArticleById(hiddenId)).toBeNull();
+    });
+  });
+
+  it('exposes ONLY PUBLISHED Articles across every lifecycle status', async () => {
+    await inRollbackTx(async (tx) => {
+      const models = await topicId(tx, 'models');
+      const sourceId = await createSource(tx, {
+        slug: 's-status',
+        topicId: models,
+      });
+      // One Article per status, all sharing a searchable keyword.
+      const idByStatus = new Map<string, string>();
+      for (const status of ARTICLE_STATUSES) {
+        const id = await createArticle(tx, {
+          sourceId,
+          hash: `st-${status}`,
+          title: `Zephyr ${status} report`,
+          status,
+        });
+        idByStatus.set(status, id);
+      }
+
+      const repo = new PublicContentRepository(tx);
+
+      // (1-5) Listing shows exactly the PUBLISHED Article.
+      const listed = await repo.listArticles({ sourceSlug: 's-status' });
+      expect(listed.map((a) => a.title)).toEqual(['Zephyr PUBLISHED report']);
+      expect(await repo.countArticles({ sourceSlug: 's-status' })).toBe(1);
+
+      // (6) Direct article lookup: 404 (null) for every non-PUBLISHED status,
+      // the row for PUBLISHED. getArticle() is exactly what /article/[id] calls.
+      for (const status of ARTICLE_STATUSES) {
+        const id = idByStatus.get(status)!;
+        const found = await getArticle(tx, id);
+        if (status === 'PUBLISHED') {
+          expect(found?.title).toBe('Zephyr PUBLISHED report');
+        } else {
+          expect(found).toBeNull();
+        }
+      }
+
+      // (7) Search, Latest, and Topic never leak a non-PUBLISHED Article.
+      const hits = await repo.searchArticles('Zephyr');
+      expect(hits.map((a) => a.title)).toEqual(['Zephyr PUBLISHED report']);
+
+      const topicIds = await repo.topicSelfAndChildIds(models);
+      const byTopic = await repo.listArticles({ topicIds });
+      expect(byTopic.every((a) => a.title === 'Zephyr PUBLISHED report')).toBe(
+        true,
+      );
+
+      const latest = await getLatest(tx, 1);
+      const leaked = latest.items.filter(
+        (a) =>
+          a.title.startsWith('Zephyr ') &&
+          a.title !== 'Zephyr PUBLISHED report',
+      );
+      expect(leaked).toEqual([]);
     });
   });
 

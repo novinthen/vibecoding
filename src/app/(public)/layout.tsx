@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
+import { defaultPublicationConfig } from '@/public/publication';
 import { getActivePublication } from '@/public/request';
 
 /**
@@ -23,7 +24,15 @@ export default async function PublicLayout({
 }: {
   readonly children: ReactNode;
 }) {
-  const { config } = await getActivePublication();
+  // The layout wraps every public page, including the 404 shown for an
+  // unresolved production host. In that case the page itself fails closed
+  // (notFound); the surrounding chrome only needs a neutral display name (the
+  // env app name, never a host-derived value), so nothing is "served" here.
+  const resolution = await getActivePublication();
+  const config =
+    resolution.status === 'unresolved'
+      ? defaultPublicationConfig()
+      : resolution.config;
 
   return (
     <div className="flex min-h-screen flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">

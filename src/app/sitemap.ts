@@ -15,7 +15,11 @@ export const dynamic = 'force-dynamic';
 const STATIC_PATHS = ['/', '/latest', '/topic', '/tool', '/sources', '/about'];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const { baseUrl } = await getActivePublication();
+  const resolution = await getActivePublication();
+  // Unrecognised production host: fail closed with an empty sitemap so no URLs
+  // are ever built from an unvalidated hostname.
+  if (resolution.status === 'unresolved') return [];
+  const { baseUrl } = resolution;
   const abs = (path: string): string => `${baseUrl}${path}`;
 
   const staticEntries: MetadataRoute.Sitemap = STATIC_PATHS.map((path) => ({

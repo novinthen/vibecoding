@@ -4,14 +4,14 @@ import Link from 'next/link';
 import { getToolIndex } from '@/public/content';
 import { getDb, isDatabaseConfigured } from '@/public/db';
 import { buildMetadata } from '@/public/metadata';
-import { getActivePublication } from '@/public/request';
+import { requireServedPublication } from '@/public/request';
 
 import { DataUnavailable, EmptyState, PageHeading } from '../_components/ui';
 
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
-  const { config, baseUrl } = await getActivePublication();
+  const { config, baseUrl } = await requireServedPublication();
   return buildMetadata({
     config,
     baseUrl,
@@ -23,6 +23,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function ToolIndexPage() {
+  await requireServedPublication();
   return (
     <>
       <PageHeading

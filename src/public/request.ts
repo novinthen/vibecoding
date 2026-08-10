@@ -1,70 +1,73 @@
 import { headers } from 'next/headers';
+import { notFound } from 'next/navigation';
 
+import { appEnv } from '@/config/env';
+import type { PublicationRow } from '@/domain/types';
 import { PublicationRepository } from '@/domain/repositories/publication-repository';
 
 import { getDb, isDatabaseConfigured } from './db';
 import {
-  defaultPublicationConfig,
   normalizeHostname,
-  resolvePublicationConfig,
-  type PublicationConfig,
+  resolvePublicationContext,
+  type PublicationResolution,
+  type ServedPublication,
 } from './publication';
 
 /**
- * The resolved public request context: which Publication is being served and
- * the absolute base URL to build canonical/OG links from. Resolved once per
- * request (server-only; reads request headers).
+ * Per-request Publication resolution (server-only; reads request headers).
+ *
+ * Resolution follows `hostname → enabled PublicationDomain → ACTIVE Publication`.
+ * In production, a host that does not resolve fails closed (`unresolved`); in
+ * local/preview it falls back to the in-code default so the portal is usable
+ * before any Publication is configured. The decision itself lives in the pure
+ * `resolvePublicationContext`; this module only supplies the header host, the DB
+ * lookup, and the environment.
  */
-export interface ActivePublication {
-  config: PublicationConfig;
-  /** Absolute origin for canonical URLs, e.g. `https://example.com`. */
-  baseUrl: string;
-  /** The request host as received (with port in dev), or null. */
-  host: string | null;
-}
-
 async function readHost(): Promise<string | null> {
   const store = await headers();
-  // Prefer the forwarded host (set by proxies/Vercel) over the raw Host header.
+  // Prefer the forwarded host (set by the platform/proxy) over the raw Host
+  // header. Either way the value is untrusted: it is validated against the
+  // PublicationDomain table before it can influence canonical metadata, and in
+  // production an unrecognised host is rejected rather than trusted.
   const value = store.get('x-forwarded-host') ?? store.get('host');
   return value?.trim() || null;
 }
 
-/** http for local development hosts; https everywhere else. Not hardcoded to a domain. */
-function protocolForHost(host: string | null): string {
-  if (!host) return 'https';
-  const bare = host.replace(/:\d+$/, '');
-  if (bare === 'localhost' || bare === '127.0.0.1' || bare.endsWith('.local')) {
-    return 'http';
-  }
-  return 'https';
+function isProduction(): boolean {
+  // APP_ENV is the deployment target (distinct from NODE_ENV): a preview
+  // deployment runs a production build but is treated like development here so
+  // its fallback stays practical. Only APP_ENV=production fails closed.
+  return appEnv.APP_ENV === 'production';
 }
 
-/**
- * Resolve the active Publication and base URL for the current request. Falls
- * back to the default Publication when no database is configured, no host is
- * present, or no Publication maps to the host — the portal always renders.
- */
-export async function getActivePublication(): Promise<ActivePublication> {
+/** Resolve the active Publication for the current request. */
+export async function getActivePublication(): Promise<PublicationResolution> {
   const host = await readHost();
   const normalized = normalizeHostname(host);
 
-  let config = defaultPublicationConfig();
+  let row: PublicationRow | null = null;
   if (isDatabaseConfigured() && normalized) {
     try {
-      const repo = new PublicationRepository(getDb());
-      const row = await repo.findByDomain(normalized);
-      config = resolvePublicationConfig(row);
+      row = await new PublicationRepository(getDb()).findByDomain(normalized);
     } catch {
-      // Resolution failures must never take down public rendering, and no
-      // internal error detail is ever surfaced publicly. Use the default.
-      config = defaultPublicationConfig();
+      // A resolution failure must never take down rendering or leak internals;
+      // treat it as "no match" and let the environment policy decide.
+      row = null;
     }
   }
 
-  const baseUrl = host
-    ? `${protocolForHost(host)}://${host}`
-    : 'http://localhost:3000';
+  return resolvePublicationContext({ host, row, isProduction: isProduction() });
+}
 
-  return { config, baseUrl, host };
+/**
+ * Resolve the served Publication or trigger a 404. Public routes call this so an
+ * unresolved production host returns not-found instead of being served with a
+ * default Publication or an unvalidated canonical host.
+ */
+export async function requireServedPublication(): Promise<ServedPublication> {
+  const resolution = await getActivePublication();
+  if (resolution.status === 'unresolved') {
+    notFound();
+  }
+  return resolution;
 }

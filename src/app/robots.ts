@@ -10,7 +10,13 @@ import { getActivePublication } from '@/public/request';
 export const dynamic = 'force-dynamic';
 
 export default async function robots(): Promise<MetadataRoute.Robots> {
-  const { baseUrl } = await getActivePublication();
+  const resolution = await getActivePublication();
+  if (resolution.status === 'unresolved') {
+    // Unrecognised production host: fail closed. Disallow everything and emit no
+    // host-derived sitemap/host, so an arbitrary hostname is never advertised.
+    return { rules: [{ userAgent: '*', disallow: '/' }] };
+  }
+  const { baseUrl } = resolution;
   return {
     rules: [
       {
