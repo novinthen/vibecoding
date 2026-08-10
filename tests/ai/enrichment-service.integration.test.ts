@@ -8,7 +8,7 @@ import {
   EnrichmentIneligibleError,
 } from '@/ai/enrichment/service';
 import { resolveSuggestions } from '@/ai/enrichment/suggestions';
-import { closePool, getPool, type Db } from '@/db/client';
+import { closePool, getPool, withTransaction, type Db } from '@/db/client';
 import { migrate } from '@/db/migrate';
 import {
   ArticleEnrichmentRepository,
@@ -16,6 +16,7 @@ import {
   EntityRepository,
   TopicRepository,
 } from '@/domain';
+import { ENRICHMENT_LOCK_NAMESPACE } from '@/domain/repositories/article-enrichment-repository';
 import type { ArticleRow } from '@/domain/types';
 
 /**
@@ -296,6 +297,85 @@ describe.skipIf(!hasDb)('enrichArticle (integration)', () => {
       expect(await countRows(tx, 'entity_aliases')).toBe(aliasesBefore);
     });
   });
+
+  // --- Concurrency. These use REAL committed transactions (not the rollback
+  // helper) so that separate connections genuinely race, then clean up after
+  // themselves. Rolled-back work cannot exhibit a cross-connection race.
+
+  it('allocates distinct, contiguous versions under concurrent same-Article writes', async () => {
+    const { articleId, sourceId } = await seedCommittedArticle();
+    try {
+      const provider = new FakeProvider({ respondWith: VALID_OUTPUT });
+      const N = 8;
+      const results = await Promise.all(
+        Array.from({ length: N }, () =>
+          withTransaction((tx) => enrichArticle(tx, provider, articleId)),
+        ),
+      );
+
+      // All concurrent attempts succeed — none is lost to a version collision.
+      expect(results.map((r) => r.outcome)).toEqual(
+        Array.from({ length: N }, () => 'SUCCEEDED'),
+      );
+
+      // Versions are distinct and form a continuous monotonic sequence 1..N.
+      const versions = results
+        .map((r) => r.enrichment.enrichment_version)
+        .sort((a, b) => a - b);
+      expect(versions).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+
+      // Every row is persisted; prior history is preserved (nothing overwritten).
+      const rows = await withTransaction((tx) =>
+        new ArticleEnrichmentRepository(tx).listByArticle(articleId, 100),
+      );
+      expect(rows).toHaveLength(N);
+      expect(new Set(rows.map((r) => r.enrichment_version)).size).toBe(N);
+    } finally {
+      await cleanupArticle(articleId, sourceId);
+    }
+  });
+
+  it('does not serialize enrichment for different Articles', async () => {
+    const a = await seedCommittedArticle();
+    const b = await seedCommittedArticle();
+    const provider = new FakeProvider({ respondWith: VALID_OUTPUT });
+    const lockClient = await getPool().connect();
+    try {
+      // Hold Article A's version-allocation lock in a separate transaction,
+      // using the exact same key the repository computes.
+      await lockClient.query('BEGIN');
+      await lockClient.query(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2::text))',
+        [ENRICHMENT_LOCK_NAMESPACE, a.articleId],
+      );
+
+      // Article B hashes to a different key: it must complete without blocking.
+      const bResult = await withTransaction((tx) =>
+        enrichArticle(tx, provider, b.articleId),
+      );
+      expect(bResult.outcome).toBe('SUCCEEDED');
+
+      // Article A must block while its lock is held elsewhere.
+      const aPromise = withTransaction((tx) =>
+        enrichArticle(tx, provider, a.articleId),
+      );
+      const raced = await Promise.race([
+        aPromise.then(() => 'resolved' as const),
+        delay(300).then(() => 'pending' as const),
+      ]);
+      expect(raced).toBe('pending');
+
+      // Release the lock; Article A now proceeds and gets version 1.
+      await lockClient.query('ROLLBACK');
+      const aResult = await aPromise;
+      expect(aResult.outcome).toBe('SUCCEEDED');
+      expect(aResult.enrichment.enrichment_version).toBe(1);
+    } finally {
+      lockClient.release();
+      await cleanupArticle(a.articleId, a.sourceId);
+      await cleanupArticle(b.articleId, b.sourceId);
+    }
+  });
 });
 
 async function countRows(tx: Db, table: string): Promise<number> {
@@ -303,4 +383,40 @@ async function countRows(tx: Db, table: string): Promise<number> {
     `SELECT COUNT(*)::text AS count FROM ${table}`,
   );
   return Number(result.rows[0]?.count ?? '0');
+}
+
+/** Seed a committed Article (its own transaction) for concurrency tests. */
+async function seedCommittedArticle(): Promise<{
+  articleId: string;
+  sourceId: string;
+}> {
+  return withTransaction(async (tx) => {
+    const source = await tx.query<{ id: string }>(
+      `INSERT INTO sources (name, slug, source_type, authority_tier)
+       VALUES ('S', 'conc-' || gen_random_uuid(), 'RSS', 'TRUSTED')
+       RETURNING id`,
+    );
+    const sourceId = source.rows[0]!.id;
+    const article = await new ArticleRepository(tx).create({
+      sourceId,
+      url: `https://example.com/${crypto.randomUUID()}`,
+      originalTitle: 'Concurrent enrichment article',
+    });
+    return { articleId: article.id, sourceId };
+  });
+}
+
+/** Remove a committed test Article (cascades enrichments) and its Source. */
+async function cleanupArticle(
+  articleId: string,
+  sourceId: string,
+): Promise<void> {
+  await withTransaction(async (tx) => {
+    await tx.query('DELETE FROM articles WHERE id = $1', [articleId]);
+    await tx.query('DELETE FROM sources WHERE id = $1', [sourceId]);
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

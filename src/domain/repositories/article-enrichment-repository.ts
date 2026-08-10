@@ -9,6 +9,15 @@ import type {
 } from '../types';
 
 /**
+ * Fixed namespace for the per-Article enrichment-version advisory lock. Combined
+ * with `hashtext(article_id)` it forms a two-int `pg_advisory_xact_lock` key, so
+ * enrichment-version allocation for one Article serialises while different
+ * Articles (different hashes) do not block each other. Exported so tests can take
+ * the identical lock.
+ */
+export const ENRICHMENT_LOCK_NAMESPACE = 6647410; // 0x656E72 — "enr"
+
+/**
  * Fields persisted for one AI enrichment attempt. Every field is derived data —
  * this input NEVER carries or touches an Article source fact. `enrichmentVersion`
  * is not accepted here: the repository assigns the next per-Article version
@@ -54,12 +63,31 @@ export class ArticleEnrichmentRepository {
   constructor(private readonly db: Db) {}
 
   /**
-   * Append one enrichment attempt with the next per-Article version, assigned
-   * atomically inside the INSERT (`COALESCE(MAX(version), 0) + 1`). The
-   * UNIQUE(article_id, enrichment_version) constraint makes concurrent inserts
-   * fail closed rather than silently reuse a version. Returns the stored row.
+   * Append one enrichment attempt with the next per-Article version.
+   *
+   * Version allocation is concurrency-safe and MUST run inside a transaction
+   * (the enrichment service always calls it within `withTransaction`). A
+   * transaction-scoped advisory lock keyed on the Article is taken in its own
+   * statement FIRST; only then does the INSERT read `MAX(version) + 1`. This
+   * ordering matters under READ COMMITTED: the INSERT's snapshot is taken after
+   * the lock is granted — i.e. after any predecessor holding the same key has
+   * committed — so each concurrent write for the same Article reads a fresh MAX
+   * and receives its own distinct, contiguous version instead of colliding on the
+   * UNIQUE constraint and losing an attempt. (Folding the lock into the INSERT's
+   * own statement would not work: that statement's snapshot predates the lock, so
+   * a blocked writer would still read a stale MAX.) Different Articles hash to
+   * different keys and never serialise. The lock releases at transaction end, and
+   * UNIQUE(article_id, enrichment_version) remains a backstop.
    */
   async create(input: CreateEnrichmentInput): Promise<ArticleEnrichmentRow> {
+    // Statement 1: acquire the per-Article allocation lock (transaction-scoped).
+    await this.db.query(
+      'SELECT pg_advisory_xact_lock($1, hashtext($2::text))',
+      [ENRICHMENT_LOCK_NAMESPACE, input.articleId],
+    );
+
+    // Statement 2: allocate MAX+1 and insert, under a snapshot taken after the
+    // lock was granted (so a just-committed predecessor's version is visible).
     const result = await this.db.query<ArticleEnrichmentRow>(
       `INSERT INTO article_enrichments
          (article_id, enrichment_version, model_provider, model_name,
@@ -70,10 +98,10 @@ export class ArticleEnrichmentRepository {
           structured_output, validation_error, error_code, error_message,
           generated_at)
        SELECT
-          $1,
+          $1::uuid,
           COALESCE(
             (SELECT MAX(enrichment_version) FROM article_enrichments
-             WHERE article_id = $1), 0) + 1,
+             WHERE article_id = $1::uuid), 0) + 1,
           $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
           $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21, $22, $23,
           COALESCE($24::timestamptz, now())

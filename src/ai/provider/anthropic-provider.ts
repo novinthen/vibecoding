@@ -63,62 +63,98 @@ export class AnthropicProvider implements AiProvider {
   async completeStructured(
     request: StructuredRequest,
   ): Promise<StructuredResponse> {
+    // A single deadline bounds the WHOLE operation — connection, headers, body
+    // consumption, and JSON parsing. A provider that sends headers then stalls
+    // the body is aborted just like one that stalls the connection. The timer is
+    // cleared in `finally` on every exit path so no timer leaks.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
 
-    let response: Response;
     try {
-      response = await this.fetchImpl(`${this.baseUrl}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': this.apiKey,
-          'anthropic-version': ANTHROPIC_VERSION,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_tokens: request.maxOutputTokens ?? 1024,
-          temperature: request.temperature ?? 0,
-          system: request.system,
-          messages: [{ role: 'user', content: request.input }],
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      // AbortError => our timeout fired; anything else is a transport failure.
-      const aborted = error instanceof Error && error.name === 'AbortError';
-      throw new AiProviderError(
-        aborted ? 'TIMEOUT' : 'NETWORK',
-        aborted
-          ? 'Anthropic request timed out.'
-          : 'Anthropic request failed to reach the provider.',
-        { cause: error },
-      );
+      // --- Connection + response headers.
+      let response: Response;
+      try {
+        response = await this.fetchImpl(`${this.baseUrl}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+          },
+          body: JSON.stringify({
+            model: this.model,
+            max_tokens: request.maxOutputTokens ?? 1024,
+            temperature: request.temperature ?? 0,
+            system: request.system,
+            messages: [{ role: 'user', content: request.input }],
+          }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw new AiProviderError(
+          timedOut || isAbortError(error) ? 'TIMEOUT' : 'NETWORK',
+          timedOut || isAbortError(error)
+            ? 'Anthropic request timed out.'
+            : 'Anthropic request failed to reach the provider.',
+          { cause: error },
+        );
+      }
+
+      if (!response.ok) {
+        // Body may carry provider detail, but it can echo request content; keep
+        // the surfaced message generic (status only) to avoid leaking secrets.
+        throw new AiProviderError(
+          codeForHttpStatus(response.status),
+          `Anthropic request failed with HTTP ${response.status}.`,
+          { httpStatus: response.status },
+        );
+      }
+
+      // --- Body consumption, still under the SAME deadline. Reading the body
+      // separately from parsing lets an abort mid-body surface as TIMEOUT while a
+      // genuinely malformed payload surfaces as UNPARSEABLE_RESPONSE.
+      let rawBody: string;
+      try {
+        rawBody = await response.text();
+      } catch (error) {
+        if (timedOut || isAbortError(error)) {
+          throw new AiProviderError(
+            'TIMEOUT',
+            'Anthropic response body timed out.',
+            { cause: error },
+          );
+        }
+        throw new AiProviderError(
+          'NETWORK',
+          'Anthropic response body could not be read.',
+          { cause: error },
+        );
+      }
+
+      // --- JSON envelope parsing.
+      let body: AnthropicMessagesResponse;
+      try {
+        body = JSON.parse(rawBody) as AnthropicMessagesResponse;
+      } catch (error) {
+        throw new AiProviderError(
+          'UNPARSEABLE_RESPONSE',
+          'Anthropic response envelope was not valid JSON.',
+          { cause: error },
+        );
+      }
+
+      return this.parseBody(body);
     } finally {
       clearTimeout(timer);
     }
+  }
 
-    if (!response.ok) {
-      // Body may carry provider detail, but it can echo request content; keep the
-      // surfaced message generic (status only) to avoid leaking prompt/secret.
-      throw new AiProviderError(
-        codeForHttpStatus(response.status),
-        `Anthropic request failed with HTTP ${response.status}.`,
-        { httpStatus: response.status },
-      );
-    }
-
-    let body: AnthropicMessagesResponse;
-    try {
-      body = (await response.json()) as AnthropicMessagesResponse;
-    } catch (error) {
-      throw new AiProviderError(
-        'UNPARSEABLE_RESPONSE',
-        'Anthropic response envelope was not valid JSON.',
-        { cause: error },
-      );
-    }
-
+  /** Extract and validate the text/JSON payload from a decoded envelope. */
+  private parseBody(body: AnthropicMessagesResponse): StructuredResponse {
     const text = (body.content ?? [])
       .filter(
         (block) => block.type === 'text' && typeof block.text === 'string',
@@ -153,6 +189,11 @@ export class AnthropicProvider implements AiProvider {
       },
     };
   }
+}
+
+/** Whether a thrown value is an AbortError (fetch/stream aborted by our signal). */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 /**

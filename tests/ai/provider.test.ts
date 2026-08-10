@@ -207,6 +207,138 @@ describe('AnthropicProvider (injected fetch, no live calls)', () => {
   });
 });
 
+describe('AnthropicProvider — whole-operation timeout (deterministic)', () => {
+  const TIMEOUT_MS = 1000;
+
+  function abortError(): Error {
+    const error = new Error('The operation was aborted.');
+    error.name = 'AbortError';
+    return error;
+  }
+
+  /** A minimal Response whose body text resolves immediately. */
+  function textResponse(text: string, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      text: () => Promise.resolve(text),
+    } as unknown as Response;
+  }
+
+  function provider(fetchImpl: typeof fetch): AnthropicProvider {
+    return new AnthropicProvider({
+      apiKey: 'k',
+      model: 'm',
+      timeoutMs: TIMEOUT_MS,
+      fetchImpl,
+    });
+  }
+
+  it('succeeds for a prompt response and leaves no pending timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = (async () =>
+        textResponse(
+          JSON.stringify({
+            content: [{ type: 'text', text: '{"relevance":"RELEVANT"}' }],
+            usage: { input_tokens: 1, output_tokens: 2 },
+          }),
+        )) as unknown as typeof fetch;
+
+      const result = await provider(fetchImpl).completeStructured(REQUEST);
+      expect(result.parsed).toEqual({ relevance: 'RELEVANT' });
+      // The deadline timer was cleared on the success path — no leak.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out when the connection/headers stall', async () => {
+    vi.useFakeTimers();
+    try {
+      // Never resolves until our deadline aborts the signal.
+      const fetchImpl = ((_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(abortError()));
+        })) as unknown as typeof fetch;
+
+      const p = provider(fetchImpl).completeStructured(REQUEST);
+      const assertion = expect(p).rejects.toMatchObject({
+        name: 'AiProviderError',
+        code: 'TIMEOUT',
+        retryable: true,
+      });
+      await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out when headers arrive but the body stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      // Headers resolve immediately; reading the body hangs until abort.
+      const fetchImpl = ((_url: string, init: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            new Promise((_resolve, reject) => {
+              init.signal?.addEventListener('abort', () =>
+                reject(abortError()),
+              );
+            }),
+        } as unknown as Response)) as unknown as typeof fetch;
+
+      const p = provider(fetchImpl).completeStructured(REQUEST);
+      const assertion = expect(p).rejects.toMatchObject({
+        code: 'TIMEOUT',
+        retryable: true,
+      });
+      await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a malformed (non-JSON) body as UNPARSEABLE_RESPONSE, not TIMEOUT', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = (async () =>
+        textResponse('this is not json')) as unknown as typeof fetch;
+
+      const p = provider(fetchImpl).completeStructured(REQUEST);
+      await expect(p).rejects.toMatchObject({
+        code: 'UNPARSEABLE_RESPONSE',
+        retryable: false,
+      });
+      // Completed without needing the timer — and the timer was cleared.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not leak a timer after an HTTP error status', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = (async () =>
+        textResponse('{}', 500)) as unknown as typeof fetch;
+      await expect(
+        provider(fetchImpl).completeStructured(REQUEST),
+      ).rejects.toMatchObject({ code: 'SERVER' });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('buildProvider / resolveConfiguredProvider', () => {
   it('builds a fake provider from config', () => {
     const provider = buildProvider({ provider: 'fake', model: 'fake-1' });
