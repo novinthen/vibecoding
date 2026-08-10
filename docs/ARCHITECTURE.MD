@@ -188,6 +188,36 @@ AI must not:
 
 Use a provider abstraction so domain code depends on capabilities, not one vendor.
 
+### Stage 6 implementation
+
+Stage 6 implements the enrichment layer under `src/ai`:
+
+- **Provider boundary** (`src/ai/provider`): a provider-neutral `AiProvider`
+  capability (`completeStructured`) with a classified error model (retryable vs
+  non-retryable). Implementations: a deterministic `FakeProvider` (tests/local
+  smoke, no network) and a thin `AnthropicProvider` over `fetch` (no vendor SDK).
+  `src/ai/config.ts` builds a provider from validated, server-only env config.
+- **Structured output** (`src/ai/enrichment/schema.ts`): a `.strict()` Zod schema.
+  Provider output is machine-validated before persistence; malformed/partial/
+  extra-key replies are rejected and recorded as `INVALID_OUTPUT`.
+- **Prompt-injection boundary** (`src/ai/enrichment/prompt.ts`): trusted
+  task/schema instructions live in the `system` field; untrusted Article facts go
+  in a separate `input` payload inside explicit delimiters (forged delimiters and
+  control characters stripped). Article text is data, never instructions. No
+  secret is ever placed in a prompt.
+- **Versioned persistence**: the existing `article_enrichments` table (migration
+  `0014`) stores every attempt as an immutable version with status, relevance,
+  provenance, suggestions, usage, and error detail — re-running never destroys
+  prior provenance.
+- **Enrichment service** (`enrichArticle`) writes only to `article_enrichments`;
+  it never modifies Article/Story source facts and never publishes.
+- **Suggestion matching** (`resolveSuggestions`) is read-only: it maps
+  suggestions to existing canonical records and never creates a Topic, Entity, or
+  alias.
+
+AI output is **advisory**. Promotion into canonical Story/editorial fields is a
+separate, explicit, approved workflow that Stage 6 does not perform.
+
 ## Background Jobs
 
 Inngest will later handle durable, retryable workflows such as:

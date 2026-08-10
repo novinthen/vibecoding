@@ -1,6 +1,6 @@
 # Current Stage
 
-# Stage 5B — Multi-Publication Localisation
+# Stage 6 — AI Intelligence
 
 ## Status
 
@@ -8,149 +8,132 @@
 
 This file defines the only implementation scope currently approved.
 
-Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), and
-Stage 5 (Public Portal) are complete and merged. Do not begin Stage 6 (AI),
-Stage 7 (Clustering), Stage 8 (Ranking/Trending), GitHub ingestion, or Hacker
-News ingestion.
+Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5
+(Public Portal), and Stage 5B (Multi-Publication Localisation) are complete. Do
+not begin Stage 7 (Clustering), Stage 8 (Ranking/Trending), GitHub ingestion, or
+Hacker News ingestion.
 
 ---
 
 # Goal
 
-Make the public portal genuinely multi-publication and localisation-ready:
+Add a **safe, versioned AI-enrichment layer** for canonical Articles. AI helps
+interpret source facts without becoming the source of truth:
 
 ```
-one canonical intelligence backend
-  → multiple Publications
-  → multiple domains
-  → multiple locales
-  → publication-specific editorial presentation
+Article source facts
+  → AI enrichment request (provider-neutral)
+  → structured/versioned enrichment record
+  → strict machine validation
+  → admin review
+  → (later, separately approved) controlled promotion into editorial fields
 ```
 
-Canonical Article/Story facts are **global** and are never duplicated. Each
-Publication is an independent editorial brand with its own domain(s), name,
-locale, positioning, Story selection, headline, summary, slug, publication
-state, and SEO identity. Localisation content for one Publication never leaks
-into another.
-
-The work builds on the existing schema (migrations `0003`, `0009`) — Publication,
-PublicationDomain, PublicationStory, StoryLocalization already exist — so
-**Stage 5B required no schema migrations**.
+AI is **optional and advisory**. If the provider is unavailable, rate-limited,
+misconfigured, or returns invalid output: source Articles stay intact, ingestion
+and public rendering continue, and the failure is recorded so a retry is safe.
 
 ---
 
 # Implemented
 
-1. **Publication administration** — an authorized, audited admin surface
-   (`/admin/publications`) to list, create, edit, and activate/deactivate
-   Publications; manage primary/default locale, timezone, branding (name,
-   tagline), SEO description, and editorial profile (positioning, audience);
-   and add/remove/enable/disable domains, mark one primary domain per
-   Publication, and enforce global domain uniqueness. Branding/SEO/editorial
-   JSONB edits **merge** (unknown keys preserved; AI/source facts never
-   overwritten). A **PublicationDomain lifecycle** keeps the invariant that an
-   ACTIVE Publication with domains has exactly one enabled primary: the first
-   domain auto-becomes primary; a disabled domain can never be primary;
-   disabling/removing the primary atomically promotes the oldest remaining
-   enabled domain (or is refused for an ACTIVE Publication with no replacement);
-   new Publications start INACTIVE and cannot be activated without an enabled
-   primary domain.
-2. **PublicationStory workflow** — attach a **real** canonical Story to a
-   Publication and edit its per-Publication presentation (slug, headline,
-   published summary, published "why it matters", featured, editorial priority,
-   status). Publishing stamps `published_at` once and requires a slug. Canonical
-   Story facts are never altered. The same Story may be published by many
-   Publications with different headlines. No fake Stories are created.
-3. **StoryLocalization workflow** — multiple locale rows per PublicationStory
-   (one per `(publication_story, locale)`), each with localized headline,
-   summary, why-it-matters, localisation status (DRAFT/REVIEW/PUBLISHED/
-   ARCHIVED), translation source/provenance, model provider/name, and
-   reviewer. Languages are **rows keyed by locale**, never columns. Stage 5B
-   supports **manual/editorial localisation and import of translated text** — no
-   automated AI translation provider is invoked (that is a Stage 6 seam).
-4. **Public locale resolution** — deterministic and publication-controlled:
-   the domain determines the Publication; the locale is a valid `?locale=`
-   parameter else the Publication's `default_locale`. Browser
-   `Accept-Language` is never consulted. Locales are validated against a
-   conservative BCP-47 subset.
-5. **Locale-aware Story rendering** — for a resolved Publication the Story route
-   loads the PUBLISHED PublicationStory, then applies an **approved
-   (PUBLISHED)** StoryLocalization for the chosen locale, else the
-   default-locale localisation, else the Publication's own canonical publication
-   copy. Every localisation read is scoped to that PublicationStory, so content
-   can never be borrowed from another Publication. Article pages remain based on
-   canonical Article/source facts and are never auto-translated.
-6. **SEO/localised metadata** — publication-specific canonical URLs built from
-   the validated domain; localized title/description; Open Graph locale reflects
-   the rendered locale; hreflang alternates cover a Story's approved locales
-   **within the same Publication origin** (never cross-domain); the root
-   `<html lang>` reflects the active Publication's default locale; the sitemap
-   lists real published Stories.
-7. **Publication-aware feed** — `/feed.xml` is an Atom feed scoped to the
-   resolved Publication: its domain, PUBLISHED Story selection, editorial copy,
-   default-locale metadata, and Publication attribution. It fails closed on an
-   unresolved production host and yields an honest empty feed when there are no
-   published Stories.
-8. **Auditability** — every Publication/domain/PublicationStory/StoryLocalization
-   mutation writes an `AdminAuditLog` row (actor, action, target, before/after,
-   metadata) inside the same transaction as the mutation.
+1. **Provider-neutral AI boundary** — `src/ai/provider` defines an `AiProvider`
+   capability (`completeStructured`) plus a classified error model
+   (retryable vs non-retryable). Two implementations: a deterministic
+   `FakeProvider` (tests + local smoke, no network) and a thin `AnthropicProvider`
+   over `fetch` (no vendor SDK). `src/ai/config.ts` builds a provider from
+   validated env config. Domain code depends only on the interface; API keys are
+   server-only and never bundled or logged.
+2. **Strict structured output** — `src/ai/enrichment/schema.ts` is a `.strict()`
+   Zod schema (relevance, relevanceReason, summary, whyItMatters, suggestedTopics,
+   suggestedEntities, confidence). Malformed/partial/extra-key replies are
+   rejected, never silently accepted. The model may return only
+   RELEVANT/MAYBE_RELEVANT/IRRELEVANT; UNCLASSIFIED is system-assigned on failure.
+3. **Prompt-injection boundary** — `src/ai/enrichment/prompt.ts` keeps trusted
+   task/schema instructions in the `system` field and untrusted Article facts in a
+   separate `input` payload wrapped in explicit delimiters. Forged delimiter
+   tokens and control characters are stripped from content; secrets are never
+   placed in a prompt. Article text is data, never instructions.
+4. **Versioned enrichment persistence** — migration `0014` extends the existing
+   `article_enrichments` table (no new table) with `enrichment_version`, `status`
+   (SUCCEEDED / INVALID_OUTPUT / PROVIDER_ERROR), `relevance`, `schema_version`,
+   `suggested_topics/entities`, `usage`, `generated_at`, and error fields, plus a
+   `UNIQUE (article_id, enrichment_version)` invariant. Each attempt is an
+   immutable new version; re-running preserves prior provenance.
+5. **Enrichment service** — `enrichArticle` orchestrates eligibility → prompt →
+   provider → strict validation → versioned persistence. It **only** writes to
+   `article_enrichments`; it never modifies an Article, Story, Entity, or Topic.
+   Provider and validation failures are recorded as their own versions with
+   classified error/validation detail.
+6. **Read-only suggestion matching** — `resolveSuggestions` deterministically maps
+   suggested Topics/Entities to existing canonical records (by slug / normalised
+   alias) and splits them into `matched` vs `unresolved`. It creates nothing: a
+   hallucinated name can never silently become a canonical Topic, Entity, or alias.
+7. **Admin trigger + review** — the Article detail page shows the latest
+   enrichment, prior versions, relevance, summary, why-it-matters,
+   provider/model/version, confidence, suggestions (matched vs candidate), and
+   validation/provider errors. An authorized **manual** trigger (mutating admins
+   only; VIEWERs refused) runs one bounded enrichment and writes an
+   `ARTICLE_ENRICHMENT_TRIGGER` audit row. Nothing is published by the trigger.
+8. **Cost/control seams** — eligibility gate, explicit manual trigger, bounded
+   content/token limits, provider/model selection via env, token/cost metadata,
+   and retryable-error classification. No production scheduling was added.
 
-See [`docs/PUBLIC_PORTAL.md`](PUBLIC_PORTAL.md) for the localisation architecture
-and resolution/fallback rules.
+See [`docs/ARCHITECTURE.MD`](ARCHITECTURE.MD) (AI Architecture) and
+[`docs/ADMIN.md`](ADMIN.md) for operational detail.
 
 ---
 
 # Do Not Implement
 
-- AI summaries; automated AI translation; Entity extraction; embeddings; Story
-  clustering; ranking/trending;
-- GitHub ingestion; Hacker News ingestion; arbitrary scraping;
-- user accounts; personalization; comments; recommendation ML; payments; native
-  apps;
-- new queueing/search/database infrastructure.
-
-Do not create fake Story data to demonstrate localisation.
+- Story clustering / semantic clustering; ranking/trending; embeddings
+  generation;
+- automated publishing; automated Story creation; **automatic promotion of AI
+  output into canonical Story/editorial fields**;
+- GitHub ingestion; Hacker News ingestion; automated translation/localisation;
+- recommendation systems; user personalization; autonomous editorial decisions;
+- new queueing/search/database infrastructure; production enrichment scheduling.
 
 ---
 
 # Important Invariants
 
-- Canonical Articles and Stories are global; Publication-specific presentation
-  and localisation never overwrite canonical facts.
-- One Story may be published by many Publications; one PublicationStory may have
-  many locales; one locale may appear across many Publications; the same Story
-  may have different English headlines across different English Publications.
-- Localisation content from Publication A must never leak into Publication B.
-- Only PUBLISHED public content is rendered publicly (PublicationStory PUBLISHED;
-  StoryLocalization PUBLISHED).
-- Production domains continue to **fail closed** unless configured.
-- Locale selection is deterministic and publication-controlled; no browser
-  header silently changes the Publication or served locale.
-- No canonical domain logic assumes a single hostname, brand, or locale.
+- AI output is **advisory**. A RELEVANT classification never publishes an Article;
+  promotion into canonical/editorial fields is a separate, explicit, approved
+  workflow that Stage 6 does not perform.
+- AI **never** overwrites Article/Story source facts. Enrichment lives only in the
+  separate, versioned `article_enrichments` table.
+- Every enrichment attempt is machine-validated before persistence; a malformed
+  reply is recorded as INVALID_OUTPUT, not trusted.
+- Re-running enrichment **versions** derived data; it never destroys prior
+  provenance.
+- Suggested Topics/Entities are candidates until an explicit review/matching layer
+  resolves them; no canonical record is created silently.
+- AI is optional: with no provider configured, ingestion, admin, and public
+  rendering behave exactly as before.
+- Article/feed content is untrusted and is passed to the model strictly as data.
 
 ---
 
 # Exit Criteria
 
-Stage 5B is complete only when:
+Stage 6 is complete only when:
 
-- Publication/domain/PublicationStory/StoryLocalization admin is server-authorized
-  and audited; domain uniqueness and the one-primary-domain invariant hold;
-- PublicationStory presentation is separate from canonical Story facts, and
-  StoryLocalization parentage / one-locale-per-PublicationStory / multi-locale
-  behave correctly, with no cross-Publication leakage;
-- public locale resolution and the documented fallback render correctly, and
-  publication-specific canonical/metadata is generated without cross-domain
-  canonicalisation;
-- the production fail-closed behaviour is preserved;
-- Stage 3/4/5 regressions, the Stage 5B localisation tests, typecheck, lint,
-  format check, the full test suite, and the production build all pass, and at
-  least two configured Publications with different domains/locales smoke-test
-  correctly.
+- the provider abstraction, strict schema validation, prompt-injection boundary,
+  versioned persistence, relevance classification, suggestion-matching, and the
+  audited admin trigger/review are implemented and tested with deterministic
+  fakes (no live AI in required CI);
+- AI overwriting source facts, auto-publishing AI output, lost provenance, weak
+  validation, prompt-injection exposure, secret leakage, uncontrolled execution,
+  and silent Entity/Topic creation are all shown absent;
+- Stage 3/4/5/5B regressions, the Stage 6 unit + DB integration tests, typecheck,
+  lint, format check, the full test suite, and the production build all pass, and
+  an admin enrichment smoke test with a fake provider succeeds.
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 6, Stage 7, ranking, GitHub ingestion, or Hacker News
-ingestion without explicit approval. Do not merge to `main` without review.
+Do not begin Stage 7 (clustering), Stage 8 (ranking/trending), automated
+publishing, GitHub ingestion, or Hacker News ingestion without explicit approval.
+Do not merge to `main` without review.

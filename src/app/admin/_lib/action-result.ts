@@ -15,6 +15,8 @@ import { AdminValidationError, NotFoundError } from '@/admin/errors';
 export interface ActionState {
   ok?: boolean;
   error?: string;
+  /** Optional success detail shown alongside `ok` (e.g. an enrichment outcome). */
+  message?: string;
   fieldErrors?: Record<string, string>;
 }
 

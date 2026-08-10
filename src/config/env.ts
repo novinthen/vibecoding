@@ -59,6 +59,23 @@ const serverSchema = z.object({
    * validates the shape at call time. Never commit a real roster.
    */
   ADMIN_USERS: z.string().min(1).optional(),
+  /**
+   * AI enrichment provider selection (Stage 6). `fake` uses the deterministic
+   * in-memory provider (tests, local smoke); `anthropic` uses the live Messages
+   * API adapter. Unset means AI is not configured — enrichment is OPTIONAL and
+   * the rest of the app (ingestion, admin, public) works unchanged.
+   */
+  AI_PROVIDER: z.enum(['anthropic', 'fake']).optional(),
+  /**
+   * Server-only AI API key. Never exposed to the browser and never embedded in a
+   * prompt or error message. Required (validated at call time) when
+   * AI_PROVIDER=anthropic.
+   */
+  AI_API_KEY: z.string().min(1).optional(),
+  /** Model identifier passed to the provider (e.g. a claude-* model id). */
+  AI_MODEL: z.string().min(1).optional(),
+  /** Optional override for the provider base URL (compatible endpoints/proxies). */
+  AI_BASE_URL: z.string().url().optional(),
 });
 
 /**
@@ -176,4 +193,50 @@ export function requireAdminAuthConfig(env: AppEnv = appEnv): AdminAuthConfig {
 /** Whether the admin surface is configured, without throwing. */
 export function isAdminConfigured(env: AppEnv = appEnv): boolean {
   return Boolean(env.ADMIN_SESSION_SECRET && env.ADMIN_USERS);
+}
+
+/** Resolved AI provider configuration (Stage 6). */
+export interface AiProviderConfig {
+  provider: 'anthropic' | 'fake';
+  /** Present for providers that require it (anthropic); absent for fake. */
+  apiKey?: string;
+  model: string;
+  baseUrl?: string;
+}
+
+/** Whether an AI enrichment provider is configured, without throwing. */
+export function isAiConfigured(env: AppEnv = appEnv): boolean {
+  return Boolean(env.AI_PROVIDER);
+}
+
+/**
+ * Resolve the AI provider configuration or throw a clear error. AI is optional:
+ * only enrichment code paths call this, so ingestion, admin, and public rendering
+ * never require AI to be configured. The API key is validated for providers that
+ * need it and is never surfaced beyond this server-only boundary.
+ */
+export function requireAiConfig(env: AppEnv = appEnv): AiProviderConfig {
+  const provider = env.AI_PROVIDER;
+  if (!provider) {
+    throw new Error(
+      'AI provider is not configured. Set AI_PROVIDER (and, for anthropic, ' +
+        'AI_API_KEY and AI_MODEL). See .env.example and docs/ARCHITECTURE.MD.',
+    );
+  }
+  if (provider === 'fake') {
+    return { provider, model: env.AI_MODEL ?? 'fake-1' };
+  }
+  // anthropic
+  if (!env.AI_API_KEY) {
+    throw new Error('AI_API_KEY is required when AI_PROVIDER=anthropic.');
+  }
+  if (!env.AI_MODEL) {
+    throw new Error('AI_MODEL is required when AI_PROVIDER=anthropic.');
+  }
+  return {
+    provider,
+    apiKey: env.AI_API_KEY,
+    model: env.AI_MODEL,
+    baseUrl: env.AI_BASE_URL,
+  };
 }

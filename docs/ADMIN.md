@@ -17,8 +17,15 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Articles** (`/admin/articles`): search/filter by Source, status, and
   title/excerpt text with date-ordered pagination; a detail view exposes
   canonical/source URLs, source facts, timestamps, and hashes/identifiers. The
-  only Article mutation is a **lifecycle status change** — Article inspection is
-  never Story editing, and source facts are read-only (provenance preserved).
+  only Article source mutation is a **lifecycle status change** — Article
+  inspection is never Story editing, and source facts are read-only (provenance
+  preserved). The detail view also hosts the **AI enrichment** panel (Stage 6):
+  it shows the latest enrichment and prior versions (advisory relevance, summary,
+  why-it-matters, suggested Topics/Entities split into canonical matches vs.
+  unresolved candidates, provider/model/version, confidence, and any
+  validation/provider errors), and — for mutating admins — a **manual trigger**
+  to run one bounded enrichment. AI output is advisory and is never published by
+  the trigger.
 - **Topics** (`/admin/topics`): view the controlled taxonomy, add a sub-Topic
   under an existing top-level Topic, and enable/disable Topics. The fixed
   top-level taxonomy is not extended here.
@@ -41,7 +48,29 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 Every meaningful mutation writes an `AdminAuditLog` record (what changed, which
 record, before/after where practical, timestamp, and the acting admin). Stage 5B
 adds audited actions for Publication/domain/PublicationStory/StoryLocalization
-create/edit/status changes.
+create/edit/status changes. Stage 6 adds an `ARTICLE_ENRICHMENT_TRIGGER` audit
+record for each manual enrichment run (outcome, provider, model, version, and
+resulting relevance).
+
+## AI enrichment (Stage 6)
+
+The Article detail page is the review surface for AI enrichment. AI is
+**optional**: with no provider configured (`AI_PROVIDER` unset) the trigger
+control is hidden, and ingestion/admin/public behaviour is unchanged.
+
+- **Trigger.** Only mutating admins (ADMIN/EDITOR) may run enrichment; VIEWERs
+  are refused server-side (hiding the control is never the security boundary).
+  Each run is a single bounded AI call under explicit human control — Stage 6
+  adds no production scheduling. A "force" option bypasses the eligibility gate
+  for a deliberate re-run.
+- **Provider.** Selected by env: `AI_PROVIDER=fake` (deterministic, no network)
+  or `anthropic` (`AI_API_KEY` + `AI_MODEL`). Keys are server-only and never
+  reach a prompt, log, or the browser.
+- **Safety.** The trigger only appends a new, versioned `article_enrichments`
+  row; it never edits Article/Story source facts and never publishes. Provider
+  failures and invalid output are recorded (retry is safe). Suggested
+  Topics/Entities are advisory candidates — an explicit matching layer surfaces
+  canonical matches, but no Topic/Entity/alias is ever created automatically.
 
 ## Authentication & authorization
 

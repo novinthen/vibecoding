@@ -1,4 +1,5 @@
 import type {
+  ArticleEnrichmentRow,
   ArticleRow,
   PublicationDomainRow,
   PublicationRow,
@@ -101,6 +102,29 @@ export function auditPublicationStoryView(
     featured: row.featured,
     editorial_priority: row.editorial_priority,
     published_at: row.published_at,
+  };
+}
+
+/**
+ * ArticleEnrichment audit view (Stage 6). Records the derived-data provenance of
+ * an enrichment attempt — provider/model/version/status/relevance — never any
+ * Article source fact. Excludes verbose summary/why-it-matters/raw output to keep
+ * the audit trail compact; the enrichment row itself holds the full detail.
+ */
+export function auditEnrichmentView(
+  row: ArticleEnrichmentRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    article_id: row.article_id,
+    enrichment_version: row.enrichment_version,
+    status: row.status,
+    relevance: row.relevance,
+    model_provider: row.model_provider,
+    model_name: row.model_name,
+    prompt_version: row.prompt_version,
+    schema_version: row.schema_version,
+    confidence: row.confidence,
   };
 }
 
