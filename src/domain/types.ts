@@ -121,3 +121,22 @@ export interface EntityRow {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * One admin/editorial audit record. The target is polymorphic
+ * (target_type + target_id) with no FK, so audit history survives deletion of
+ * the object it describes. `before`/`after` capture relevant state for the
+ * change; `metadata` holds action-specific context.
+ */
+export interface AdminAuditLogRow {
+  id: string;
+  actor_id: string | null;
+  actor_identifier: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}

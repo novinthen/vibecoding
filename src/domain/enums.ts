@@ -115,6 +115,17 @@ export const ENTITY_RELATIONSHIPS = [
 export const entityRelationshipSchema = z.enum(ENTITY_RELATIONSHIPS);
 export type EntityRelationship = z.infer<typeof entityRelationshipSchema>;
 
+/**
+ * Administrator roles (Stage 4). Mirrors the future role set named in
+ * docs/ARCHITECTURE.md. Stage 4 authorization is deliberately coarse: ADMIN and
+ * EDITOR may perform the implemented editorial mutations; VIEWER is read-only.
+ * These are application-level roles (admins are env-configured, not DB rows), so
+ * there is no corresponding SQL CHECK constraint.
+ */
+export const ADMIN_ROLES = ['ADMIN', 'EDITOR', 'VIEWER'] as const;
+export const adminRoleSchema = z.enum(ADMIN_ROLES);
+export type AdminRole = z.infer<typeof adminRoleSchema>;
+
 export const PUBLICATION_STATUSES = ['ACTIVE', 'INACTIVE', 'ARCHIVED'] as const;
 export const publicationStatusSchema = z.enum(PUBLICATION_STATUSES);
 export type PublicationStatus = z.infer<typeof publicationStatusSchema>;

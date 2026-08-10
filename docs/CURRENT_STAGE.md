@@ -1,6 +1,6 @@
 # Current Stage
 
-# Stage 3 — News Ingestion Engine
+# Stage 4 — Admin & Editorial Operations
 
 ## Status
 
@@ -8,111 +8,101 @@
 
 This file defines the only implementation scope currently approved.
 
-Stage 2 (Foundation & Data Layer) is complete. Do not begin Stage 4 or any later
-stage (Admin/Editorial, Public Portal, AI, Clustering, Ranking, GitHub or Hacker
-News ingestion).
+Stage 3 (News Ingestion Engine) is complete and merged. Do not begin Stage 5
+(Public Portal) or any later stage (AI, Clustering, Ranking, GitHub or Hacker
+News ingestion, multi-publication rendering).
 
 ---
 
 # Goal
 
-Build the first reliable news-ingestion pipeline on top of the Stage 2 canonical
-data model. The target flow is:
+Build the minimum secure admin/editorial control plane needed to operate and
+inspect the ingestion system. The admin makes the existing ingestion system
+observable and controllable. Operational usefulness is prioritized over visual
+polish.
 
-```text
-Source
-  → fetch
-  → parse
-  → normalize
-  → canonicalize URL
-  → exact deduplication
-  → Article persistence
-  → SourceFetch audit
-  → Source health state
-```
-
-Ingestion creates/updates **Articles**, never Stories.
+The admin surface lives inside the same Next.js application (`/admin`) — a
+modular monolith, not a separate service.
 
 ---
 
-# Implement
+# Implemented
 
-1. Source Adapter contract (`validate / fetch / normalize / healthCheck` seam).
-2. RSS and Atom support first (one adapter over RSS 2.0, RSS 1.0/RDF, Atom 1.0).
-3. Safe HTTP fetching:
-   - timeout;
-   - redirect limit (manual, re-validated per hop);
-   - conditional requests (ETag / Last-Modified);
-   - source-aware rate-control seam;
-   - retryable vs non-retryable error classification;
-   - SSRF protections.
-4. Normalize feed items into one canonical ingestion shape.
-5. URL canonicalization (safe host/scheme/path normalization, tracking-parameter
-   removal, preservation of unknown parameters).
-6. Exact duplicate prevention using existing Article constraints and
-   deterministic keys/hashes.
-7. Persist Articles through the existing data-access layer.
-8. Record every fetch attempt in SourceFetch.
-9. Derive/update Source health from fetch results.
-10. Manual/CLI ingestion entry point for testing specific Sources.
-11. Extend CI/tests.
+1. **Admin authentication/authorization** — env-configured roster
+   (`ADMIN_USERS`, scrypt hashes), stateless HMAC-signed httpOnly session
+   cookie (`ADMIN_SESSION_SECRET`), and a role model (`ADMIN`/`EDITOR`/`VIEWER`).
+   Authorization is enforced server-side in every mutation, not in the UI.
+2. **Source management** — list, inspect, create, edit permitted fields,
+   enable/disable, health / consecutive failures / last success /
+   conditional-fetch state, and manual ingestion delegated to the Stage 3
+   engine (no duplicated ingestion logic).
+3. **Fetch operations** — global `SourceFetch` inspection with status filtering,
+   HTTP/result info, counts, and error details; failed/degraded Sources are easy
+   to identify.
+4. **Article inspection** — list with Source/status/text filters and date-ordered
+   pagination; detail view of canonical/source URLs, source facts, timestamps,
+   and hashes. Article status change is the only Article mutation. Article ≠
+   Story is preserved.
+5. **Editorial operations** — Article status changes, Source authority/default-
+   topic management, and controlled sub-Topic management + enable/disable.
+6. **Admin auditability** — every meaningful mutation writes an `AdminAuditLog`
+   record (action, target, before/after where practical, timestamp, acting
+   admin) via the existing audit architecture.
 
-## Representative-source rule
-
-Prove the architecture on a small representative set (different feed behaviours)
-before expanding. Tricky behaviours (redirect/tracking URLs, malformed/failing
-feeds) are proven with stored fixtures in the test suite; live registry feeds are
-validated only via an opt-in smoke suite (`INGEST_LIVE_SMOKE=1`). Do not expand
-the registry broadly yet.
+See `docs/ADMIN.md` for the auth model, environment requirements, and security
+notes.
 
 ---
 
 # Do Not Implement
 
-- GitHub ingestion; Hacker News ingestion; RSSHub-specific adapters; arbitrary
-  scraping; browser automation;
-- AI, summaries, Entity extraction, embeddings, Story clustering, ranking/trending,
-  translation/localisation;
-- public portal redesign; admin UI beyond minimal operational seams;
-- scheduled production polling (unless needed to prove the architecture);
-- Redis, Kafka, RabbitMQ, Elasticsearch, a crawler service, or microservices.
+- AI summarization, Entity extraction, embeddings, Story clustering,
+  ranking/trending;
+- GitHub ingestion; Hacker News ingestion;
+- translation/localisation workflows; multi-publication public rendering; the
+  public portal;
+- recommendation systems; analytics dashboards beyond basic operational metrics;
+- production scheduling; new queueing/search/database infrastructure.
 
 ---
 
 # Important Invariants
 
-- Article ≠ Story; ingestion creates/updates Articles only.
-- Source facts remain untouched by AI-derived data.
-- One ingestion run is idempotent; fetching the same item twice creates no
-  duplicate Article.
-- External feeds/URLs/HTML are untrusted input.
-- A broken Source never silently disappears; failures are observable through
-  SourceFetch and Source health.
-- One slow/failing Source must not corrupt other Sources.
-- Canonical intelligence remains publication-independent.
+- Article ≠ Story; the admin never turns Article inspection into Story editing.
+- Source facts remain untouched by admin edits (only status/operational and
+  permitted config fields change); provenance preserved.
+- The `/admin` surface is not publicly writable; server-side authorization
+  protects every mutation.
+- Manual ingestion reuses the Stage 3 SSRF/fetch protections; no ingestion logic
+  is duplicated.
+- Feed-derived Article/Source content is untrusted and never rendered as unsafe
+  HTML.
+- No secrets, raw credentials, or internal stack traces are exposed.
 
 ---
 
 # Exit Criteria
 
-Stage 3 is complete only when:
+Stage 4 is complete only when:
 
-- the Source Adapter contract exists and RSS/Atom parse into one canonical shape;
-- fetching is timeout-, redirect-, size-, and SSRF-bounded, issues conditional
-  requests, and classifies retryable vs non-retryable errors;
-- URL canonicalization strips tracking parameters and preserves meaningful ones;
-- exact deduplication prevents duplicate Articles and re-ingestion is idempotent;
-- every fetch attempt is recorded in SourceFetch and Source health transitions
-  deterministically;
-- a CLI ingestion entry point can register and ingest specific Sources;
-- deterministic fixture tests, DB integration tests, typecheck, lint, format
-  check, the full test suite, and the production build all pass.
-
-Live representative-source validation may follow once the above passes; keep any
-live smoke tests out of normal CI.
+- the `/admin` surface is authenticated and server-side authorization protects
+  all mutations (unauthorized mutations are rejected);
+- Sources can be listed, inspected, created, edited, enabled/disabled, and
+  manually ingested through the existing engine;
+- `SourceFetch` history and Article inspection/filtering work against the
+  existing schema;
+- every meaningful admin mutation produces an `AdminAuditLog` record;
+- untrusted feed content renders safely;
+- tests (auth/authz, unauthorized-mutation rejection, source create/edit/enable,
+  validation failures, audit-log creation, manual-ingestion delegation,
+  query/filter behavior, safe rendering), DB integration tests, the Stage 3
+  ingestion regression tests, typecheck, lint, format check, the full test
+  suite, and the production build all pass.
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 4 or later without explicit approval.
+Do not begin Stage 5 or later, AI, clustering, ranking, GitHub ingestion, or
+Hacker News ingestion without explicit approval. Do not merge to `main` without
+review.
