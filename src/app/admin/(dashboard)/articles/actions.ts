@@ -61,11 +61,14 @@ export async function triggerArticleEnrichmentAction(
     return toActionState(error);
   }
 
+  // No transaction is opened here: triggerArticleEnrichment runs the provider
+  // call first and then persists (with its audit) in its own short transaction,
+  // so no DB transaction is held open across the AI network request.
   let outcome: string;
   try {
-    const result = await withTransaction((tx) =>
-      triggerArticleEnrichment(tx, actor, provider, id, { force }),
-    );
+    const result = await triggerArticleEnrichment(actor, provider, id, {
+      force,
+    });
     outcome = result.outcome;
   } catch (error) {
     return toActionState(error);

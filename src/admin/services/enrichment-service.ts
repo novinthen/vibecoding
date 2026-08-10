@@ -1,3 +1,5 @@
+import type { Pool } from 'pg';
+
 import {
   ArticleNotFoundError,
   enrichArticle,
@@ -31,22 +33,45 @@ import { auditEnrichmentView } from './audit-view';
  */
 
 /**
- * Run enrichment for one Article as an authorized admin action, recording an
- * audit row for the trigger regardless of outcome. VIEWERs are refused. The
- * provider is injected so tests use a fake and no live AI call is required.
+ * Run enrichment for one Article as an authorized admin action. VIEWERs are
+ * refused. The provider is injected so tests use a fake and no live AI call is
+ * required. No transaction is passed in or held during the AI call: `enrichArticle`
+ * performs the provider request first, then persists the versioned enrichment in
+ * its own short transaction — and the audit row is written INSIDE that same
+ * transaction via `onPersist`, so the enrichment and its audit record commit
+ * atomically. The `outcome` recorded in the audit equals the persisted row's
+ * status (SUCCEEDED / INVALID_OUTPUT / PROVIDER_ERROR).
  */
 export async function triggerArticleEnrichment(
-  db: Db,
   actor: AdminSession,
   provider: AiProvider,
   articleId: string,
   options: EnrichArticleOptions = {},
+  pool?: Pool,
 ): Promise<EnrichmentResult> {
   assertCanMutate(actor);
 
-  let result: EnrichmentResult;
   try {
-    result = await enrichArticle(db, provider, articleId, options);
+    return await enrichArticle(provider, articleId, options, {
+      pool,
+      onPersist: async (tx, enrichment) => {
+        await new AdminAuditLogRepository(tx).record({
+          action: 'ARTICLE_ENRICHMENT_TRIGGER',
+          actorIdentifier: actor.username,
+          targetType: 'article',
+          targetId: articleId,
+          after: auditEnrichmentView(enrichment),
+          metadata: {
+            role: actor.role,
+            outcome: enrichment.status,
+            provider: enrichment.model_provider,
+            model: enrichment.model_name,
+            enrichment_version: enrichment.enrichment_version,
+            relevance: enrichment.relevance,
+          },
+        });
+      },
+    });
   } catch (error) {
     if (error instanceof ArticleNotFoundError) {
       throw new NotFoundError('Article not found.');
@@ -56,24 +81,6 @@ export async function triggerArticleEnrichment(
     }
     throw error;
   }
-
-  await new AdminAuditLogRepository(db).record({
-    action: 'ARTICLE_ENRICHMENT_TRIGGER',
-    actorIdentifier: actor.username,
-    targetType: 'article',
-    targetId: articleId,
-    after: auditEnrichmentView(result.enrichment),
-    metadata: {
-      role: actor.role,
-      outcome: result.outcome,
-      provider: result.enrichment.model_provider,
-      model: result.enrichment.model_name,
-      enrichment_version: result.enrichment.enrichment_version,
-      relevance: result.enrichment.relevance,
-    },
-  });
-
-  return result;
 }
 
 export interface ArticleEnrichmentReview {

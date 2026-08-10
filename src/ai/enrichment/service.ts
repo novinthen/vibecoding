@@ -1,5 +1,8 @@
-import type { Db } from '@/db/client';
+import type { Pool } from 'pg';
+
+import { getPool, type Db } from '@/db/client';
 import { ArticleEnrichmentRepository, ArticleRepository } from '@/domain';
+import type { CreateEnrichmentInput } from '@/domain';
 import type {
   ArticleEnrichmentRow,
   ArticleRow,
@@ -96,18 +99,43 @@ export function isEligibleForEnrichment(article: ArticleRow): {
   return { eligible: true };
 }
 
+/** Injectable dependencies for the enrichment service. */
+export interface EnrichArticleDeps {
+  /** Pool for reads and for the owned persistence transaction (default: shared). */
+  pool?: Pool;
+  /**
+   * Extra work to run INSIDE the same short transaction that allocates the
+   * version and inserts the enrichment (e.g. the admin audit write). It sees the
+   * persisted row and commits atomically with it. Must do no network I/O.
+   */
+  onPersist?: (tx: Db, enrichment: ArticleEnrichmentRow) => Promise<void>;
+}
+
 /**
- * Enrich one Article. Returns a discriminated result and, in every non-throwing
- * branch, persists exactly one new enrichment version. Throws only for caller
+ * Enrich one Article via the normal public path — the caller needs NO transaction
+ * handling.
+ *
+ * Ordering is deliberate and structural:
+ *  1. read the Article and check eligibility (autocommit read);
+ *  2. call the AI provider and validate its output — with NO database transaction
+ *     open, so a slow/stalled provider never holds a DB lock;
+ *  3. persist exactly one new version inside the repository's OWN short
+ *     transaction (advisory-locked allocation + insert), optionally running
+ *     `deps.onPersist` in that same transaction.
+ *
+ * Every non-throwing branch (success, invalid output, provider error) persists a
+ * versioned row through the same concurrency-safe path. Throws only for caller
  * errors (missing Article, ineligible without force) — those write nothing.
  */
 export async function enrichArticle(
-  db: Db,
   provider: AiProvider,
   articleId: string,
   options: EnrichArticleOptions = {},
+  deps: EnrichArticleDeps = {},
 ): Promise<EnrichmentResult> {
-  const article = await new ArticleRepository(db).findById(articleId);
+  const pool = deps.pool ?? getPool();
+
+  const article = await new ArticleRepository(pool).findById(articleId);
   if (!article) throw new ArticleNotFoundError();
 
   if (!options.force) {
@@ -119,15 +147,77 @@ export async function enrichArticle(
     }
   }
 
-  const enrichments = new ArticleEnrichmentRepository(db);
+  // Provider call + validation happen OUTSIDE any transaction.
+  const prepared = await prepareEnrichment(article, provider, options);
+
+  // Persist through the repository's owned, concurrency-safe transaction.
+  const enrichment = await new ArticleEnrichmentRepository(
+    pool,
+  ).createVersioned(prepared.input, { pool, withinTx: deps.onPersist });
+
+  switch (prepared.kind) {
+    case 'SUCCEEDED':
+      return { outcome: 'SUCCEEDED', enrichment, output: prepared.output };
+    case 'INVALID_OUTPUT':
+      return {
+        outcome: 'INVALID_OUTPUT',
+        enrichment,
+        validationError: prepared.validationError,
+      };
+    case 'PROVIDER_ERROR':
+      return {
+        outcome: 'PROVIDER_ERROR',
+        enrichment,
+        retryable: prepared.retryable,
+        errorCode: prepared.errorCode,
+      };
+  }
+}
+
+/** Outcome of the provider+validation step, plus the row to persist. No DB I/O. */
+type PreparedEnrichment =
+  | {
+      kind: 'SUCCEEDED';
+      input: CreateEnrichmentInput;
+      output: EnrichmentOutput;
+    }
+  | {
+      kind: 'INVALID_OUTPUT';
+      input: CreateEnrichmentInput;
+      validationError: string;
+    }
+  | {
+      kind: 'PROVIDER_ERROR';
+      input: CreateEnrichmentInput;
+      retryable: boolean;
+      errorCode: string;
+    };
+
+/**
+ * Run the AI provider and validate its output, producing the enrichment row to
+ * persist. Performs the network call and strict validation but touches no
+ * database — persistence is a separate, short, transactional step. A provider
+ * failure or invalid output becomes a PROVIDER_ERROR / INVALID_OUTPUT row rather
+ * than throwing, so every attempt is recorded through the same path.
+ */
+async function prepareEnrichment(
+  article: ArticleRow,
+  provider: AiProvider,
+  options: EnrichArticleOptions,
+): Promise<PreparedEnrichment> {
   const { request, promptName, promptVersion, schemaVersion } =
     buildEnrichmentRequest(article, {
       maxContentChars: options.maxContentChars,
       maxOutputTokens: options.maxOutputTokens,
       temperature: options.temperature,
     });
+  const provenance = {
+    articleId: article.id,
+    promptName,
+    promptVersion,
+    schemaVersion,
+  };
 
-  // --- Provider call: any failure is classified and recorded, never thrown out.
   let response;
   try {
     response = await provider.completeStructured(request);
@@ -136,71 +226,61 @@ export async function enrichArticle(
       error instanceof AiProviderError
         ? error
         : new AiProviderError('UNKNOWN', 'Unexpected provider failure.');
-    const enrichment = await enrichments.create({
-      articleId,
-      modelProvider: provider.name,
-      modelName: provider.model,
-      promptName,
-      promptVersion,
-      schemaVersion,
-      status: 'PROVIDER_ERROR',
-      relevance: 'UNCLASSIFIED',
-      errorCode: providerError.code,
-      errorMessage: providerError.message,
-    });
     return {
-      outcome: 'PROVIDER_ERROR',
-      enrichment,
+      kind: 'PROVIDER_ERROR',
       retryable: providerError.retryable,
       errorCode: providerError.code,
+      input: {
+        ...provenance,
+        modelProvider: provider.name,
+        modelName: provider.model,
+        status: 'PROVIDER_ERROR',
+        relevance: 'UNCLASSIFIED',
+        errorCode: providerError.code,
+        errorMessage: providerError.message,
+      },
     };
   }
 
-  // --- Strict validation: a malformed/partial reply is recorded as INVALID.
   const validation = validateEnrichmentOutput(response.parsed);
   if (!validation.ok) {
-    const enrichment = await enrichments.create({
-      articleId,
-      modelProvider: response.provider,
-      modelName: response.model,
-      promptName,
-      promptVersion,
-      schemaVersion,
-      status: 'INVALID_OUTPUT',
-      relevance: 'UNCLASSIFIED',
-      validationError: validation.error,
-      usage: usageFrom(response.usage),
-      // Keep the raw parsed object (when it is one) for debugging/audit.
-      structuredOutput: asRecord(response.parsed),
-    });
     return {
-      outcome: 'INVALID_OUTPUT',
-      enrichment,
+      kind: 'INVALID_OUTPUT',
       validationError: validation.error,
+      input: {
+        ...provenance,
+        modelProvider: response.provider,
+        modelName: response.model,
+        status: 'INVALID_OUTPUT',
+        relevance: 'UNCLASSIFIED',
+        validationError: validation.error,
+        usage: usageFrom(response.usage),
+        // Keep the raw parsed object (when it is one) for debugging/audit.
+        structuredOutput: asRecord(response.parsed),
+      },
     };
   }
 
-  // --- Success: persist the validated, structured enrichment version.
   const output = validation.value;
-  const enrichment = await enrichments.create({
-    articleId,
-    modelProvider: response.provider,
-    modelName: response.model,
-    promptName,
-    promptVersion,
-    schemaVersion,
-    status: 'SUCCEEDED',
-    relevance: output.relevance,
-    relevanceReason: output.relevanceReason,
-    summary: output.summary,
-    whyItMatters: output.whyItMatters,
-    confidence: output.confidence,
-    suggestedTopics: output.suggestedTopics.map(toSuggestedTopic),
-    suggestedEntities: output.suggestedEntities.map(toSuggestedEntity),
-    usage: usageFrom(response.usage),
-    structuredOutput: asRecord(response.parsed),
-  });
-  return { outcome: 'SUCCEEDED', enrichment, output };
+  return {
+    kind: 'SUCCEEDED',
+    output,
+    input: {
+      ...provenance,
+      modelProvider: response.provider,
+      modelName: response.model,
+      status: 'SUCCEEDED',
+      relevance: output.relevance,
+      relevanceReason: output.relevanceReason,
+      summary: output.summary,
+      whyItMatters: output.whyItMatters,
+      confidence: output.confidence,
+      suggestedTopics: output.suggestedTopics.map(toSuggestedTopic),
+      suggestedEntities: output.suggestedEntities.map(toSuggestedEntity),
+      usage: usageFrom(response.usage),
+      structuredOutput: asRecord(response.parsed),
+    },
+  };
 }
 
 function toSuggestedTopic(

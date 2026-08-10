@@ -1,4 +1,6 @@
-import type { Db } from '@/db/client';
+import type { Pool } from 'pg';
+
+import { getPool, withTransaction, type Db } from '@/db/client';
 
 import type { EnrichmentStatus, RelevanceClassification } from '../enums';
 import type {
@@ -50,6 +52,18 @@ export interface CreateEnrichmentInput {
   generatedAt?: Date | string | null;
 }
 
+/** Options controlling the owned persistence transaction. */
+export interface PersistEnrichmentOptions {
+  /** Pool to open the transaction on (defaults to the shared pool). */
+  pool?: Pool;
+  /**
+   * Extra work to run INSIDE the same transaction as the enrichment insert (e.g.
+   * the admin audit write), so persistence and its audit commit atomically. It
+   * must not perform any network I/O — the transaction is meant to stay short.
+   */
+  withinTx?: (tx: Db, enrichment: ArticleEnrichmentRow) => Promise<void>;
+}
+
 /**
  * Data access for versioned AI ArticleEnrichments (Stage 6).
  *
@@ -63,32 +77,55 @@ export class ArticleEnrichmentRepository {
   constructor(private readonly db: Db) {}
 
   /**
-   * Append one enrichment attempt with the next per-Article version.
+   * Append one enrichment attempt with the next per-Article version, atomically
+   * and concurrency-safely — the transaction is owned HERE, not by the caller, so
+   * correctness never depends on a caller remembering to wrap this in one.
    *
-   * Version allocation is concurrency-safe and MUST run inside a transaction
-   * (the enrichment service always calls it within `withTransaction`). A
-   * transaction-scoped advisory lock keyed on the Article is taken in its own
-   * statement FIRST; only then does the INSERT read `MAX(version) + 1`. This
-   * ordering matters under READ COMMITTED: the INSERT's snapshot is taken after
-   * the lock is granted — i.e. after any predecessor holding the same key has
-   * committed — so each concurrent write for the same Article reads a fresh MAX
-   * and receives its own distinct, contiguous version instead of colliding on the
-   * UNIQUE constraint and losing an attempt. (Folding the lock into the INSERT's
-   * own statement would not work: that statement's snapshot predates the lock, so
-   * a blocked writer would still read a stale MAX.) Different Articles hash to
-   * different keys and never serialise. The lock releases at transaction end, and
-   * UNIQUE(article_id, enrichment_version) remains a backstop.
+   * The method opens its own short transaction and, inside it: (1) takes a
+   * transaction-scoped advisory lock keyed on the Article in its own statement;
+   * (2) reads `MAX(version) + 1` and inserts. The ordering matters under READ
+   * COMMITTED — the INSERT's snapshot is taken after the lock is granted, i.e.
+   * after any predecessor holding the same key has committed, so each concurrent
+   * write for the same Article reads a fresh MAX and gets its own distinct,
+   * contiguous version instead of colliding on the UNIQUE constraint and losing an
+   * attempt. (Folding the lock into the INSERT's own statement would not work: its
+   * snapshot predates the lock, so a blocked writer would still read a stale MAX.
+   * Splitting the two statements across autocommit connections would also fail:
+   * the lock would release before the INSERT — hence the owned transaction here.)
+   * Different Articles hash to different keys and never serialise. The lock
+   * releases at transaction end; UNIQUE(article_id, enrichment_version) backstops.
+   *
+   * The external AI provider call must have completed BEFORE this is invoked —
+   * this transaction is deliberately short and holds no network operation.
+   *
+   * `options.withinTx` runs additional work (e.g. the admin audit write) INSIDE
+   * the same transaction, so persistence and its audit commit atomically.
    */
-  async create(input: CreateEnrichmentInput): Promise<ArticleEnrichmentRow> {
-    // Statement 1: acquire the per-Article allocation lock (transaction-scoped).
-    await this.db.query(
-      'SELECT pg_advisory_xact_lock($1, hashtext($2::text))',
-      [ENRICHMENT_LOCK_NAMESPACE, input.articleId],
-    );
+  async createVersioned(
+    input: CreateEnrichmentInput,
+    options: PersistEnrichmentOptions = {},
+  ): Promise<ArticleEnrichmentRow> {
+    const pool = options.pool ?? getPool();
+    return withTransaction(async (tx) => {
+      // Statement 1: acquire the per-Article allocation lock (txn-scoped).
+      await tx.query('SELECT pg_advisory_xact_lock($1, hashtext($2::text))', [
+        ENRICHMENT_LOCK_NAMESPACE,
+        input.articleId,
+      ]);
+      // Statement 2: allocate MAX+1 and insert, under a snapshot taken after the
+      // lock was granted (so a just-committed predecessor's version is visible).
+      const enrichment = await this.insertVersion(tx, input);
+      if (options.withinTx) await options.withinTx(tx, enrichment);
+      return enrichment;
+    }, pool);
+  }
 
-    // Statement 2: allocate MAX+1 and insert, under a snapshot taken after the
-    // lock was granted (so a just-committed predecessor's version is visible).
-    const result = await this.db.query<ArticleEnrichmentRow>(
+  /** The INSERT itself, assuming the allocation lock is already held in `tx`. */
+  private async insertVersion(
+    tx: Db,
+    input: CreateEnrichmentInput,
+  ): Promise<ArticleEnrichmentRow> {
+    const result = await tx.query<ArticleEnrichmentRow>(
       `INSERT INTO article_enrichments
          (article_id, enrichment_version, model_provider, model_name,
           prompt_name, prompt_version, schema_version, status,

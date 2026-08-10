@@ -40,5 +40,6 @@ export {
   ArticleNotFoundError,
   EnrichmentIneligibleError,
   type EnrichArticleOptions,
+  type EnrichArticleDeps,
   type EnrichmentResult,
 } from './enrichment/service';
