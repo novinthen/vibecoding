@@ -3,10 +3,30 @@ import type {
   AuthorityTier,
   EntityType,
   HealthStatus,
+  PublicationStatus,
   SourceFetchStatus,
   SourceType,
   StoryStatus,
 } from './enums';
+
+/**
+ * One Publication — a public editorial brand/site. The JSONB `editorial_profile`
+ * / `branding` / `seo_settings` hold flexible, publication-specific presentation
+ * config (canonical intelligence stays global; publishing is publication-specific).
+ */
+export interface PublicationRow {
+  id: string;
+  name: string;
+  slug: string;
+  default_locale: string;
+  timezone: string;
+  status: PublicationStatus;
+  editorial_profile: Record<string, unknown>;
+  branding: Record<string, unknown>;
+  seo_settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
 
 /**
  * Row shapes for the core canonical tables exposed through the data-access

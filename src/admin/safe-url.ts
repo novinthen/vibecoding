@@ -1,21 +1,8 @@
 /**
- * Safe handling of untrusted URLs (Stage 4).
+ * Safe handling of untrusted URLs (admin surface).
  *
- * Article/Source URLs are feed-derived and therefore untrusted. Only http(s)
- * URLs may become clickable links in the admin UI — a `javascript:`, `data:`,
- * or otherwise unparseable value must be rendered as inert text, never as an
- * anchor href. This pure helper is the single decision point, reused by the UI
- * and covered directly by tests.
+ * The decision logic lives in the shared `@/lib/safe-url` module so the admin
+ * and the public portal apply exactly the same rule. This thin re-export keeps
+ * the existing `@/admin/safe-url` import path (and its tests) stable.
  */
-export function safeExternalUrl(
-  value: string | null | undefined,
-): string | null {
-  if (!value) return null;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  return url.protocol === 'http:' || url.protocol === 'https:' ? value : null;
-}
+export { safeExternalUrl } from '@/lib/safe-url';
