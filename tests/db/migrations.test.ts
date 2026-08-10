@@ -81,6 +81,23 @@ describe('migration files', () => {
     );
   });
 
+  it('adds clustering provenance without touching Article source facts', () => {
+    const sql = allSql();
+    // Stage 7 adds a decision log table and review/provenance columns; it must
+    // NOT add any column to `articles` (source facts stay immutable).
+    expect(sql).toContain('CREATE TABLE clustering_decisions (');
+    expect(sql).toContain(
+      "ADD COLUMN review_state text NOT NULL DEFAULT 'UNREVIEWED'",
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE article_embeddings[\s\S]*?ADD COLUMN embedding_version/,
+    );
+    // No migration alters the articles table to carry derived clustering data.
+    expect(sql).not.toMatch(
+      /ALTER TABLE articles\s+ADD COLUMN (embedding|cluster)/,
+    );
+  });
+
   it('versions AI enrichment on the existing table (no new enrichment table)', () => {
     const sql = allSql();
     // Stage 6 extends article_enrichments in place rather than adding a table.

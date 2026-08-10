@@ -247,6 +247,24 @@ Recommended fields:
 
 A merged Story should remain traceable.
 
+## Stage 7 clustering additions (migration `0015`)
+
+Clustering extends Story **in place** with review/provenance columns (it does not
+redesign the canonical model):
+
+- `review_state` — `UNREVIEWED` (default for an automatically formed Story) |
+  `REVIEWED` | `LOCKED`. REVIEWED/LOCKED Stories are **protected**: the clustering
+  engine never autonomously changes their membership; only explicit, audited admin
+  operations may. This is the false-merge / silent-split guard.
+- `formation_source` — `AUTOMATIC` (engine) | `MANUAL` (editor).
+- `clustering_method`, `clustering_version` — method/formula version that formed
+  the Story (reproducibility across upgrades).
+
+A newly clustered Story starts `DRAFT` + `UNREVIEWED` (an internal, reviewable
+state). Clustering never publishes; `canonical_title` is a **provisional**,
+evidence-based value seeded from the primary Article, with full provenance in
+`clustering_decisions`.
+
 ---
 
 # StoryArticle
@@ -272,6 +290,15 @@ Relationship types should support:
 - RELATED
 
 Prevent duplicate Story–Article relationships.
+
+### Stage 7 provenance (migration `0015`)
+
+Each membership additionally records the DERIVED clustering evidence that placed
+the Article: `clustering_method`, `clustering_version`, `score`, `decision_reason`,
+and `signals` (JSONB signal breakdown). `assignment_source` distinguishes
+`AUTOMATIC` from `MANUAL`. These annotate the link; they never touch Article
+source facts. The `(story_id, article_id)` primary key means an Article is never
+linked to the same Story twice (idempotent attach).
 
 ---
 
@@ -483,6 +510,44 @@ Prefer separate records.
 Do not generate embeddings during Stage 2.
 
 Use PostgreSQL/pgvector-compatible storage when implemented.
+
+## Stage 7 embedding provenance (migration `0015`)
+
+Both embedding tables gain `provider`, `embedding_version`, and
+`source_content_hash`. Embeddings are DERIVED data with explicit provenance: there
+is exactly one CURRENT embedding per `(row, model)` (re-embedding upserts in
+place), while every `clustering_decisions` row retains the `embedding_version` it
+used, so a later model/version refresh never destroys prior decision provenance.
+Candidate nearest-neighbour search is scoped to a single model (equal dimensions)
+and bounded by a time window, so exact pgvector `<=>` distance is used with no
+approximate index.
+
+---
+
+# ClusteringDecision (migration `0015`)
+
+Append-only, auditable log of every clustering attempt for an Article — the
+reviewable provenance surface. One row per attempt records what was decided and
+why, and never mutates a prior row.
+
+Fields:
+
+- id
+- article_id (FK, CASCADE)
+- story_id (FK, SET NULL — the log survives Story deletion)
+- method, method_version
+- embedding_provider, embedding_model, embedding_version
+- decision — `CREATED_STORY` | `ASSIGNED_EXISTING` | `AMBIGUOUS` |
+  `SKIPPED_EXISTING` | `SKIPPED_PROTECTED`
+- decision_source — `AUTOMATIC` | `MANUAL`
+- top_score, confidence, candidate_count
+- reason
+- candidates (JSONB) — the full scored candidate set considered
+- signals (JSONB) — winning signal breakdown
+- created_at
+
+A new Story is always formed when there is no confident match, so "no candidates"
+/ "below threshold" are recorded in `reason`, not as separate outcomes.
 
 ---
 

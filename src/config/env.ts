@@ -76,6 +76,14 @@ const serverSchema = z.object({
   AI_MODEL: z.string().min(1).optional(),
   /** Optional override for the provider base URL (compatible endpoints/proxies). */
   AI_BASE_URL: z.string().url().optional(),
+  /**
+   * Embedding provider selection for Story clustering (Stage 7). Only the
+   * deterministic in-process `fake` provider is supported today (offline CI,
+   * local smoke); a real provider would be a drop-in implementing the same
+   * interface. Unset defaults to `fake`, so clustering never requires a live
+   * embeddings API and the rest of the app is unaffected.
+   */
+  EMBEDDING_PROVIDER: z.enum(['fake']).optional(),
 });
 
 /**
@@ -239,4 +247,20 @@ export function requireAiConfig(env: AppEnv = appEnv): AiProviderConfig {
     model: env.AI_MODEL,
     baseUrl: env.AI_BASE_URL,
   };
+}
+
+/** Resolved embedding provider selection for clustering (Stage 7). */
+export interface EmbeddingProviderConfig {
+  provider: 'fake';
+}
+
+/**
+ * Resolve the embedding provider configuration for clustering. Never throws:
+ * clustering is an internal/admin operation and defaults to the deterministic
+ * `fake` provider, so no live embeddings API is ever required.
+ */
+export function resolveEmbeddingConfig(
+  env: AppEnv = appEnv,
+): EmbeddingProviderConfig {
+  return { provider: env.EMBEDDING_PROVIDER ?? 'fake' };
 }

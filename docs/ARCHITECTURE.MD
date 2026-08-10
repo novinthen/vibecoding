@@ -218,6 +218,44 @@ Stage 6 implements the enrichment layer under `src/ai`:
 AI output is **advisory**. Promotion into canonical Story/editorial fields is a
 separate, explicit, approved workflow that Stage 6 does not perform.
 
+## Clustering Architecture
+
+Stage 7 implements the Story clustering layer under `src/clustering`. It groups
+Articles that describe the same event into canonical Stories while preserving
+every Article as independent evidence (**Article ≠ Story**), and biases to
+**false split > false merge**.
+
+```
+Article → ensure embedding → bounded candidate generation → deterministic
+multi-signal scoring → conservative decision → apply (advisory-locked) →
+auditable ClusteringDecision
+```
+
+- **Embedding boundary** (`src/clustering/embedding`): a provider-neutral
+  `EmbeddingProvider` (`embed`) mirroring the AI provider boundary, with
+  provenance (`name`/`model`/`version`/`dimensions`). The only implementation is a
+  deterministic `FakeEmbeddingProvider` (feature hashing, no network), so required
+  CI is offline and reproducible; a real provider is a drop-in. Embeddings are
+  derived data, versioned/provenanced, and never written to Article source fields.
+- **Candidate generation** (`candidates.ts`): bounded and explainable — embedding
+  nearest-neighbours (exact pgvector `<=>` within a time window) plus shared-Entity
+  Stories, each capped, unioned, and trimmed. Never all-pairs.
+- **Scoring** (`scoring.ts`): a pure, deterministic, versioned formula
+  (`cluster-score-v1`) combining embedding similarity, title overlap, shared
+  entities, and temporal proximity, with a hard evidence gate, a conservative
+  assign threshold, and an ambiguity margin. Never an opaque LLM decision.
+- **Assignment engine** (`assignment.ts`): applies the decision under a per-Article
+  transaction-scoped advisory lock and re-checks membership inside it, so re-runs
+  are idempotent and concurrent runs are safe. It never mutates Article source
+  facts, never publishes, and never auto-modifies a REVIEWED/LOCKED Story.
+- **Provenance** (`clustering_decisions`): every attempt — including AMBIGUOUS and
+  skips — is appended as an auditable row with the scored candidate set.
+
+Clustering is optional: with no embedding provider configured it defaults to the
+fake provider, and clustering being unavailable never affects ingestion, admin, or
+public rendering. Clustering scores/review states are never exposed publicly, and
+publishing remains the explicit PublicationStory boundary.
+
 ## Background Jobs
 
 Inngest will later handle durable, retryable workflows such as:

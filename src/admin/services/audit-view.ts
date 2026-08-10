@@ -1,11 +1,13 @@
 import type {
   ArticleEnrichmentRow,
   ArticleRow,
+  ClusteringDecisionRow,
   PublicationDomainRow,
   PublicationRow,
   PublicationStoryRow,
   SourceRow,
   StoryLocalizationRow,
+  StoryRow,
   TopicRow,
 } from '@/domain/types';
 
@@ -125,6 +127,49 @@ export function auditEnrichmentView(
     prompt_version: row.prompt_version,
     schema_version: row.schema_version,
     confidence: row.confidence,
+  };
+}
+
+/**
+ * Story audit view (Stage 7). Records canonical Story provenance and clustering
+ * review state — never a per-Publication editorial projection. `canonical_title`
+ * is a provisional, evidence-based value; recording it keeps membership/review
+ * changes auditable without implying it is permanent truth.
+ */
+export function auditStoryView(row: StoryRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    slug: row.slug,
+    canonical_title: row.canonical_title,
+    status: row.status,
+    review_state: row.review_state,
+    formation_source: row.formation_source,
+    primary_article_id: row.primary_article_id,
+    clustering_method: row.clustering_method,
+    clustering_version: row.clustering_version,
+  };
+}
+
+/**
+ * ClusteringDecision audit view (Stage 7). Records the derived provenance of one
+ * clustering attempt — method/version, outcome, chosen Story, score/confidence —
+ * never an Article source fact. Excludes the full candidate array to keep the
+ * audit trail compact; the decision row itself holds it.
+ */
+export function auditClusteringDecisionView(
+  row: ClusteringDecisionRow,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    article_id: row.article_id,
+    story_id: row.story_id,
+    method: row.method,
+    method_version: row.method_version,
+    decision: row.decision,
+    decision_source: row.decision_source,
+    top_score: row.top_score,
+    confidence: row.confidence,
+    candidate_count: row.candidate_count,
   };
 }
 

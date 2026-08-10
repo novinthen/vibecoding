@@ -19,6 +19,7 @@ const NAV = [
   { href: '/admin/sources', label: 'Sources' },
   { href: '/admin/fetches', label: 'Fetches' },
   { href: '/admin/articles', label: 'Articles' },
+  { href: '/admin/stories', label: 'Stories' },
   { href: '/admin/topics', label: 'Topics' },
   { href: '/admin/publications', label: 'Publications' },
 ];

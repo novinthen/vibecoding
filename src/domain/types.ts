@@ -1,6 +1,8 @@
 import type {
   ArticleStatus,
   AuthorityTier,
+  ClusteringDecision,
+  ClusteringSource,
   EnrichmentStatus,
   EntityType,
   HealthStatus,
@@ -10,6 +12,8 @@ import type {
   RelevanceClassification,
   SourceFetchStatus,
   SourceType,
+  StoryArticleRelationship,
+  StoryReviewState,
   StoryStatus,
   TranslationSource,
 } from './enums';
@@ -186,8 +190,104 @@ export interface StoryRow {
   importance_score: number | null;
   trending_score: number | null;
   confidence: number | null;
+  /** Stage 7 clustering review state; protects editor decisions from auto-changes. */
+  review_state: StoryReviewState;
+  /** Whether the Story was first formed by the clustering engine or an editor. */
+  formation_source: ClusteringSource;
+  clustering_method: string | null;
+  clustering_version: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * One Story <-> Article membership row (Stage 7 provenance included). Source
+ * facts are never here; the clustering annotations (score/reason/signals/method)
+ * explain WHY the Article is attached, as reviewable derived evidence.
+ */
+export interface StoryArticleRow {
+  story_id: string;
+  article_id: string;
+  relationship_type: StoryArticleRelationship;
+  confidence: number | null;
+  assignment_source: string | null;
+  clustering_method: string | null;
+  clustering_version: string | null;
+  score: number | null;
+  decision_reason: string | null;
+  signals: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/**
+ * One embedding record — DERIVED data kept out of Article/Story source fields.
+ * `provider`/`model`/`embedding_version` give it explicit provenance;
+ * `source_content_hash` is the hash of the exact text embedded, so a stale
+ * embedding (its source text changed) can be detected and refreshed. The
+ * `embedding` vector is returned by `pg` as a string like "[0.1,0.2,...]".
+ */
+export interface ArticleEmbeddingRow {
+  id: string;
+  article_id: string;
+  provider: string | null;
+  model: string;
+  embedding_version: number;
+  dimensions: number;
+  embedding: string;
+  source_content_hash: string | null;
+  created_at: string;
+}
+
+export interface StoryEmbeddingRow {
+  id: string;
+  story_id: string;
+  provider: string | null;
+  model: string;
+  embedding_version: number;
+  dimensions: number;
+  embedding: string;
+  source_content_hash: string | null;
+  created_at: string;
+}
+
+/** One scored candidate considered during a clustering attempt (for review). */
+export interface ClusteringCandidateRecord {
+  storyId: string;
+  /** The Story's representative Article the comparison scored against, if any. */
+  representativeArticleId: string | null;
+  score: number;
+  passesThreshold: boolean;
+  signals: Record<string, number | null>;
+  /** How this candidate surfaced (e.g. "embedding", "entity", "time-window"). */
+  sources: string[];
+}
+
+/**
+ * One clustering decision — an append-only, auditable record of a single
+ * clustering attempt for an Article. It records the method/version, embedding
+ * provenance, the outcome, the chosen Story (if any), the top score/confidence,
+ * and the full scored candidate set, so an editor can review exactly what was
+ * considered and why. Clustering NEVER mutates Article source facts; this log is
+ * derived evidence only.
+ */
+export interface ClusteringDecisionRow {
+  id: string;
+  article_id: string;
+  story_id: string | null;
+  method: string;
+  method_version: string;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  embedding_version: number | null;
+  decision: ClusteringDecision;
+  decision_source: ClusteringSource;
+  top_score: number | null;
+  confidence: number | null;
+  candidate_count: number;
+  reason: string | null;
+  candidates: ClusteringCandidateRecord[];
+  signals: Record<string, number | null> | null;
+  created_at: string;
 }
 
 export interface EntityRow {

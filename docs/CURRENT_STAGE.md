@@ -1,6 +1,6 @@
 # Current Stage
 
-# Stage 6 — AI Intelligence
+# Stage 7 — Story Clustering & Canonical Intelligence
 
 ## Status
 
@@ -9,131 +9,136 @@
 This file defines the only implementation scope currently approved.
 
 Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5
-(Public Portal), and Stage 5B (Multi-Publication Localisation) are complete. Do
-not begin Stage 7 (Clustering), Stage 8 (Ranking/Trending), GitHub ingestion, or
-Hacker News ingestion.
+(Public Portal), Stage 5B (Multi-Publication Localisation), and Stage 6 (AI
+Intelligence) are complete. Do not begin Stage 8 (Ranking/Trending), automated
+publishing, GitHub ingestion, or Hacker News ingestion.
 
 ---
 
 # Goal
 
-Add a **safe, versioned AI-enrichment layer** for canonical Articles. AI helps
-interpret source facts without becoming the source of truth:
+Build the first trustworthy **Story clustering** layer: group Articles that
+describe the same underlying event/update into canonical Stories while preserving
+every Article as independent evidence.
 
 ```
-Article source facts
-  → AI enrichment request (provider-neutral)
-  → structured/versioned enrichment record
-  → strict machine validation
-  → admin review
-  → (later, separately approved) controlled promotion into editorial fields
+Articles
+  → candidate generation (bounded, explainable)
+  → similarity / evidence scoring (deterministic, versioned)
+  → cluster decision (conservative)
+  → Story
+  → StoryArticles
+  → reviewable clustering provenance
 ```
 
-AI is **optional and advisory**. If the provider is unavailable, rate-limited,
-misconfigured, or returns invalid output: source Articles stay intact, ingestion
-and public rendering continue, and the failure is recorded so a retry is safe.
+## Core invariant
+
+**Article ≠ Story.** A Story is a canonical grouping of evidence. Clustering
+never merges, rewrites, deletes, or mutates source Article facts. It biases to
+**false split > false merge**: when uncertain whether two Articles describe the
+same event, they are kept separate.
 
 ---
 
 # Implemented
 
-1. **Provider-neutral AI boundary** — `src/ai/provider` defines an `AiProvider`
-   capability (`completeStructured`) plus a classified error model
-   (retryable vs non-retryable). Two implementations: a deterministic
-   `FakeProvider` (tests + local smoke, no network) and a thin `AnthropicProvider`
-   over `fetch` (no vendor SDK). `src/ai/config.ts` builds a provider from
-   validated env config. Domain code depends only on the interface; API keys are
-   server-only and never bundled or logged.
-2. **Strict structured output** — `src/ai/enrichment/schema.ts` is a `.strict()`
-   Zod schema (relevance, relevanceReason, summary, whyItMatters, suggestedTopics,
-   suggestedEntities, confidence). Malformed/partial/extra-key replies are
-   rejected, never silently accepted. The model may return only
-   RELEVANT/MAYBE_RELEVANT/IRRELEVANT; UNCLASSIFIED is system-assigned on failure.
-3. **Prompt-injection boundary** — `src/ai/enrichment/prompt.ts` keeps trusted
-   task/schema instructions in the `system` field and untrusted Article facts in a
-   separate `input` payload wrapped in explicit delimiters. Forged delimiter
-   tokens and control characters are stripped from content; secrets are never
-   placed in a prompt. Article text is data, never instructions.
-4. **Versioned enrichment persistence** — migration `0014` extends the existing
-   `article_enrichments` table (no new table) with `enrichment_version`, `status`
-   (SUCCEEDED / INVALID_OUTPUT / PROVIDER_ERROR), `relevance`, `schema_version`,
-   `suggested_topics/entities`, `usage`, `generated_at`, and error fields, plus a
-   `UNIQUE (article_id, enrichment_version)` invariant. Each attempt is an
-   immutable new version; re-running preserves prior provenance.
-5. **Enrichment service** — `enrichArticle` orchestrates eligibility → prompt →
-   provider → strict validation → versioned persistence. It **only** writes to
-   `article_enrichments`; it never modifies an Article, Story, Entity, or Topic.
-   Provider and validation failures are recorded as their own versions with
-   classified error/validation detail.
-6. **Read-only suggestion matching** — `resolveSuggestions` deterministically maps
-   suggested Topics/Entities to existing canonical records (by slug / normalised
-   alias) and splits them into `matched` vs `unresolved`. It creates nothing: a
-   hallucinated name can never silently become a canonical Topic, Entity, or alias.
-7. **Admin trigger + review** — the Article detail page shows the latest
-   enrichment, prior versions, relevance, summary, why-it-matters,
-   provider/model/version, confidence, suggestions (matched vs candidate), and
-   validation/provider errors. An authorized **manual** trigger (mutating admins
-   only; VIEWERs refused) runs one bounded enrichment and writes an
-   `ARTICLE_ENRICHMENT_TRIGGER` audit row. Nothing is published by the trigger.
-8. **Cost/control seams** — eligibility gate, explicit manual trigger, bounded
-   content/token limits, provider/model selection via env, token/cost metadata,
-   and retryable-error classification. No production scheduling was added.
+1. **Clustering schema & provenance** — migration `0015` extends embeddings with
+   provider/version/content-hash provenance, adds Story `review_state`
+   (UNREVIEWED/REVIEWED/LOCKED) + `formation_source` + clustering method/version,
+   adds explainable provenance columns to `story_articles` (score, reason,
+   signals, method/version), and adds a new append-only `clustering_decisions`
+   log. No column is added to `articles` — source facts stay immutable.
+2. **Embedding provider boundary** (`src/clustering/embedding`) — a provider-
+   neutral `EmbeddingProvider` interface mirroring the Stage 6 AI boundary. A
+   deterministic `FakeEmbeddingProvider` (feature hashing) is the only provider;
+   it needs no network, so required CI is fully offline and reproducible. A real
+   provider is a drop-in. Embeddings are derived data, versioned/provenanced, and
+   never written into Article source fields; `ensureArticleEmbedding` reuses a
+   stored vector when the model/version and source-content hash are unchanged.
+3. **Candidate generation** (`src/clustering/candidates.ts`) — bounded and
+   explainable: embedding nearest-neighbours (pgvector `<=>`, exact within a
+   window) plus shared-Entity Stories, each capped and time-windowed, unioned and
+   trimmed. Never an all-pairs comparison; each candidate records which signal
+   surfaced it.
+4. **Similarity scoring** (`src/clustering/scoring.ts`) — a pure, deterministic,
+   versioned multi-signal formula (`cluster-score-v1`): weighted embedding
+   similarity, title-token overlap, shared entities, and temporal proximity, with
+   a hard evidence gate, a conservative assign threshold, and an ambiguity margin.
+   Not an opaque LLM decision.
+5. **Assignment engine** (`src/clustering/assignment.ts`) — ensure embedding →
+   candidates → score → conservative decision → apply under a per-Article advisory
+   lock → append an auditable decision. Outcomes: CREATED_STORY, ASSIGNED_EXISTING,
+   AMBIGUOUS (no merge), SKIPPED_EXISTING (idempotent re-run), SKIPPED_PROTECTED
+   (REVIEWED/LOCKED Story). Idempotent and concurrency-safe.
+6. **Story lifecycle** — a newly formed Story is DRAFT + UNREVIEWED (internal/
+   reviewable). Clustering never publishes; PublicationStory remains the explicit
+   publishing boundary. `canonical_title` is a provisional, evidence-based value
+   seeded from the primary Article, with full provenance in `clustering_decisions`.
+7. **Admin review surface** — a Stories list and detail view (members, candidate
+   scores, decision reasons/signals, method/version, confidence, source diversity,
+   timestamps) plus an Article "Story clustering" card. Justified, authorized,
+   **audited** operations: run clustering, attach, detach, create Story from
+   Article, move between Stories, set review state. VIEWERs are refused.
+8. **Public isolation** — the public portal is unchanged; only genuinely
+   published PublicationStories are public. Clustering scores/review states are
+   never exposed publicly, and clustering being unavailable does not affect
+   ingestion, admin, or public rendering.
 
-See [`docs/ARCHITECTURE.MD`](ARCHITECTURE.MD) (AI Architecture) and
-[`docs/ADMIN.md`](ADMIN.md) for operational detail.
+See [`docs/ARCHITECTURE.MD`](ARCHITECTURE.MD) (Clustering Architecture),
+[`docs/DATA_MODEL.md`](DATA_MODEL.md), and [`docs/ADMIN.md`](ADMIN.md).
 
 ---
 
 # Do Not Implement
 
-- Story clustering / semantic clustering; ranking/trending; embeddings
-  generation;
-- automated publishing; automated Story creation; **automatic promotion of AI
-  output into canonical Story/editorial fields**;
-- GitHub ingestion; Hacker News ingestion; automated translation/localisation;
-- recommendation systems; user personalization; autonomous editorial decisions;
-- new queueing/search/database infrastructure; production enrichment scheduling.
+- Ranking / trending / importance scoring; recommendation systems;
+- automated publishing; automatic promotion of a Story to any Publication;
+- autonomous merging/splitting of **reviewed** Stories;
+- a full Story summarization pipeline; automated translation;
+- GitHub ingestion; Hacker News ingestion; user personalization; alerts;
+  comments; payments;
+- new queueing/search/database infrastructure; production clustering scheduling.
 
 ---
 
 # Important Invariants
 
-- AI output is **advisory**. A RELEVANT classification never publishes an Article;
-  promotion into canonical/editorial fields is a separate, explicit, approved
-  workflow that Stage 6 does not perform.
-- AI **never** overwrites Article/Story source facts. Enrichment lives only in the
-  separate, versioned `article_enrichments` table.
-- Every enrichment attempt is machine-validated before persistence; a malformed
-  reply is recorded as INVALID_OUTPUT, not trusted.
-- Re-running enrichment **versions** derived data; it never destroys prior
-  provenance.
-- Suggested Topics/Entities are candidates until an explicit review/matching layer
-  resolves them; no canonical record is created silently.
-- AI is optional: with no provider configured, ingestion, admin, and public
-  rendering behave exactly as before.
-- Article/feed content is untrusted and is passed to the model strictly as data.
+- Clustering **never** mutates Article source facts, publishes, deletes Article
+  evidence, or silently merges two reviewed Stories.
+- Bias to **false split > false merge**: a hard evidence gate, a conservative
+  threshold, and an AMBIGUOUS (no-merge) outcome for close calls.
+- Re-running clustering is idempotent: it never creates a duplicate Story or a
+  duplicate (story, article) link, and an already-clustered Article is a no-op.
+- Embeddings are derived data with explicit provider/version provenance; a model/
+  version change is distinguishable and never destroys prior decision provenance.
+- REVIEWED/LOCKED Stories are protected from automatic restructuring; only
+  explicit, audited admin operations may change them.
+- Clustering is optional: with no embedding provider change, everything else
+  behaves exactly as before, and the public portal is stable if clustering is
+  unavailable.
 
 ---
 
 # Exit Criteria
 
-Stage 6 is complete only when:
+Stage 7 is complete only when:
 
-- the provider abstraction, strict schema validation, prompt-injection boundary,
-  versioned persistence, relevance classification, suggestion-matching, and the
-  audited admin trigger/review are implemented and tested with deterministic
-  fakes (no live AI in required CI);
-- AI overwriting source facts, auto-publishing AI output, lost provenance, weak
-  validation, prompt-injection exposure, secret leakage, uncontrolled execution,
-  and silent Entity/Topic creation are all shown absent;
-- Stage 3/4/5/5B regressions, the Stage 6 unit + DB integration tests, typecheck,
-  lint, format check, the full test suite, and the production build all pass, and
-  an admin enrichment smoke test with a fake provider succeeds.
+- the embedding-provider boundary, versioned embedding persistence, bounded
+  candidate generation, versioned deterministic scoring, the conservative
+  assignment engine (idempotent + concurrency-safe), the reviewable provenance
+  log, and the audited admin review surface are implemented and tested with
+  deterministic fakes (no live API in required CI);
+- false-merge risk, source-Article mutation, auto-publishing, lost provenance,
+  duplicate StoryArticles, clustering race conditions, and silent reviewed-Story
+  changes are all shown absent;
+- Stage 3/4/5/5B/6 regressions, the Stage 7 unit + DB integration tests,
+  typecheck, lint, format check, the full test suite, and the production build
+  all pass, and an admin clustering smoke test with the fake provider succeeds.
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 7 (clustering), Stage 8 (ranking/trending), automated
-publishing, GitHub ingestion, or Hacker News ingestion without explicit approval.
-Do not merge to `main` without review.
+Do not begin Stage 8 (ranking/trending), automated publishing, GitHub ingestion,
+or Hacker News ingestion without explicit approval. Do not merge to `main`
+without review.

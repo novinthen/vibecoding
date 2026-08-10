@@ -72,6 +72,39 @@ control is hidden, and ingestion/admin/public behaviour is unchanged.
   Topics/Entities are advisory candidates — an explicit matching layer surfaces
   canonical matches, but no Topic/Entity/alias is ever created automatically.
 
+## Story clustering (Stage 7)
+
+Two review surfaces expose the clustering layer. Clustering scores and review
+states are internal only — never shown on the public portal — and Stories formed
+by clustering are DRAFT/UNREVIEWED and **not** public until an editor publishes
+them via a Publication (PublicationStory). Clustering uses the deterministic fake
+embedding provider by default, so no live API is required.
+
+- **Stories list** (`/admin/stories`): recent Stories with status, review state,
+  Article count, and **source diversity**.
+- **Story detail** (`/admin/stories/[id]`): attached Articles (with relationship,
+  score, decision reason, origin), the full **ClusteringDecision** log (method/
+  version, outcome, confidence, top score, and the scored candidate set with
+  per-signal breakdown), source diversity, and timestamps.
+- **Article "Story clustering" card** (`/admin/articles/[id]`): current Story
+  membership(s) and the Article's decision history, plus the clustering controls.
+
+Justified, authorized, **audited** operations (mutating admins only; VIEWERs are
+refused server-side):
+
+- **Run clustering** for an Article (`STORY_CLUSTER_ARTICLE`) — groups it with the
+  same-event Story when confident, else forms a new Story; `force` re-clusters.
+- **Create Story from Article** (`STORY_CREATE_FROM_ARTICLE`) — a fresh Story.
+- **Attach** (`STORY_ARTICLE_ATTACH`) / **Detach** (`STORY_ARTICLE_DETACH`).
+- **Move** an Article between Stories (`STORY_ARTICLE_MOVE`).
+- **Set review state** (`STORY_REVIEW_STATE`) — UNREVIEWED/REVIEWED/LOCKED.
+
+Safety: clustering and every operation only touch Story/membership/embedding/
+decision rows — never an Article source fact — and never publish. Automatic
+clustering never modifies a REVIEWED/LOCKED Story; two similarly-strong matches are
+left AMBIGUOUS (unclustered) rather than merged (false split > false merge).
+Re-runs are idempotent and an Article is never linked to the same Story twice.
+
 ## Authentication & authorization
 
 Stage 4 uses the **smallest production-sensible** boundary compatible with the
