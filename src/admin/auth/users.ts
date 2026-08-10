@@ -89,3 +89,26 @@ export function authenticate(
   if (!user || !ok) return null;
   return { username: user.username, role: user.role };
 }
+
+/**
+ * Re-validate an already-issued session against the CURRENT roster, so that
+ * membership and role remain authoritative for the life of the session — not
+ * frozen at issue time. A signed session is trusted for its identity claim, but
+ * its privileges are only honoured while they still match the roster.
+ *
+ * The session is accepted only if the username still exists AND the current
+ * roster role exactly matches the role carried by the session. Any mismatch
+ * (removed admin, downgraded, upgraded, or otherwise changed role) rejects the
+ * session, forcing a fresh login. No password is re-checked here — this is a
+ * cheap, stateless roster lookup, not re-authentication.
+ */
+export function reconcileSessionWithRoster(
+  roster: readonly AdminUser[],
+  session: { username: string; role: AdminRole },
+): boolean {
+  const user = roster.find(
+    (candidate) => candidate.username === session.username,
+  );
+  if (!user) return false;
+  return user.role === session.role;
+}

@@ -13,7 +13,13 @@ export {
   DEFAULT_SESSION_TTL_SECONDS,
   type AdminSession,
 } from './session';
-export { parseRoster, loadRoster, authenticate, type AdminUser } from './users';
+export {
+  parseRoster,
+  loadRoster,
+  authenticate,
+  reconcileSessionWithRoster,
+  type AdminUser,
+} from './users';
 export {
   UnauthorizedError,
   canMutate,

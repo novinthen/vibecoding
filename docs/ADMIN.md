@@ -44,6 +44,24 @@ runtime dependencies:
   `ADMIN_SESSION_SECRET`) transported as an **httpOnly, SameSite=Lax** cookie.
   There is no session store (no Redis, no table). Tokens expire after 12 hours.
 
+- **Live-roster revocation.** The signed token carries only an identity claim
+  (username + role); it is **not** blindly trusted until expiry. On every
+  request, after the signature and expiry are verified, the session is
+  reconciled against the **current** `ADMIN_USERS` roster
+  (`getCurrentAdmin()` → `reconcileSessionWithRoster`). A session is accepted
+  only if:
+  - the username still exists in the roster; **and**
+  - the roster role exactly matches the role carried by the session.
+
+  So if an admin is **removed** from `ADMIN_USERS`, or their role is **changed**
+  (downgraded *or* upgraded), their already-issued session stops working
+  immediately — the next request is rejected and login is required again. A role
+  change never takes effect silently on an old token: the admin must re-login to
+  obtain a token carrying the new role. Passwords are **not** re-checked on each
+  request; this is a cheap, stateless roster lookup, so the stateless-session
+  architecture is preserved (no Redis, session database, or auth framework).
+  Deploying a changed `ADMIN_USERS` is therefore the revocation mechanism.
+
 - **Roles**: `ADMIN`, `EDITOR`, `VIEWER`. `ADMIN`/`EDITOR` may perform the
   implemented mutations; `VIEWER` is read-only. Authorization is enforced
   **server-side** in every admin service before any write — hiding a button is

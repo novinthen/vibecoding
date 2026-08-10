@@ -1,7 +1,11 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-import { appEnv, requireAdminAuthConfig } from '@/config/env';
+import {
+  appEnv,
+  requireAdminAuthConfig,
+  type AdminAuthConfig,
+} from '@/config/env';
 
 import { assertCanMutate } from './guard';
 import {
@@ -9,6 +13,7 @@ import {
   verifySessionToken,
   type AdminSession,
 } from './session';
+import { parseRoster, reconcileSessionWithRoster } from './users';
 
 /**
  * Next.js glue for admin sessions (Stage 4).
@@ -25,14 +30,41 @@ function cookieSecure(): boolean {
   return appEnv.NODE_ENV === 'production' || appEnv.APP_ENV === 'production';
 }
 
-/** Read and verify the current admin session, or null when absent/invalid. */
+/**
+ * Read and verify the current admin session, or null when absent/invalid.
+ *
+ * Verification has two independent gates:
+ *  1. the token's signature and expiry (verifySessionToken); and
+ *  2. reconciliation against the CURRENT roster (reconcileSessionWithRoster).
+ *
+ * The second gate makes roster membership and role authoritative for a
+ * privileged surface: if the admin was removed from ADMIN_USERS or their role
+ * changed since the token was issued, the still-unexpired token is rejected and
+ * login is required again. No password is re-checked — this is a cheap,
+ * stateless roster lookup on each request, preserving the stateless-session
+ * architecture (no Redis, no session store).
+ */
 export async function getCurrentAdmin(): Promise<AdminSession | null> {
   const config = safeConfig();
   if (!config) return null;
   const store = await cookies();
   const token = store.get(ADMIN_SESSION_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token, config.sessionSecret);
+
+  const session = verifySessionToken(token, config.sessionSecret);
+  if (!session) return null;
+
+  // Re-validate the (signed, unexpired) session against the live roster.
+  let roster;
+  try {
+    roster = parseRoster(config.usersJson);
+  } catch {
+    // A roster that no longer parses cannot authorize anyone.
+    return null;
+  }
+  if (!reconcileSessionWithRoster(roster, session)) return null;
+
+  return session;
 }
 
 /**
@@ -85,7 +117,7 @@ export async function clearSession(): Promise<void> {
   });
 }
 
-function safeConfig(): { sessionSecret: string } | null {
+function safeConfig(): AdminAuthConfig | null {
   try {
     return requireAdminAuthConfig();
   } catch {
