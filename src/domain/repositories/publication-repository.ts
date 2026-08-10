@@ -9,6 +9,12 @@ export interface CreatePublicationInput {
   slug: string;
   defaultLocale: string;
   timezone: string;
+  /**
+   * Initial status. Defaults to `INACTIVE`: a new Publication has no domains
+   * yet, and an ACTIVE Publication must have an enabled primary domain — so it
+   * is activated only through the guarded status transition once one exists.
+   */
+  status?: PublicationStatus;
   editorialProfile?: Record<string, unknown>;
   branding?: Record<string, unknown>;
   seoSettings?: Record<string, unknown>;
@@ -87,15 +93,16 @@ export class PublicationRepository {
   async create(input: CreatePublicationInput): Promise<PublicationRow> {
     const result = await this.db.query<PublicationRow>(
       `INSERT INTO publications
-         (name, slug, default_locale, timezone,
+         (name, slug, default_locale, timezone, status,
           editorial_profile, branding, seo_settings)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)
        RETURNING *`,
       [
         input.name,
         input.slug,
         input.defaultLocale,
         input.timezone,
+        input.status ?? 'INACTIVE',
         JSON.stringify(input.editorialProfile ?? {}),
         JSON.stringify(input.branding ?? {}),
         JSON.stringify(input.seoSettings ?? {}),
@@ -203,6 +210,46 @@ export class PublicationRepository {
 
   async removeDomain(id: string): Promise<void> {
     await this.db.query('DELETE FROM publication_domains WHERE id = $1', [id]);
+  }
+
+  /** The enabled primary domain of a Publication, or null (invariant probe). */
+  async findEnabledPrimaryDomain(
+    publicationId: string,
+  ): Promise<PublicationDomainRow | null> {
+    const result = await this.db.query<PublicationDomainRow>(
+      `SELECT * FROM publication_domains
+       WHERE publication_id = $1 AND is_primary = true AND enabled = true
+       LIMIT 1`,
+      [publicationId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * A deterministic replacement primary candidate: the oldest ENABLED domain
+   * of the Publication other than `excludeId` (ties broken by domain name).
+   * Used to auto-promote a new primary when the current one is disabled/removed.
+   */
+  async findReplacementEnabledDomain(
+    publicationId: string,
+    excludeId: string,
+  ): Promise<PublicationDomainRow | null> {
+    const result = await this.db.query<PublicationDomainRow>(
+      `SELECT * FROM publication_domains
+       WHERE publication_id = $1 AND enabled = true AND id <> $2
+       ORDER BY created_at ASC, domain ASC
+       LIMIT 1`,
+      [publicationId, excludeId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /** Clear the primary flag on a single domain (e.g. when disabling it). */
+  async clearDomainPrimary(id: string): Promise<void> {
+    await this.db.query(
+      'UPDATE publication_domains SET is_primary = false WHERE id = $1',
+      [id],
+    );
   }
 
   /**

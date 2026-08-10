@@ -48,7 +48,13 @@ PublicationDomain, PublicationStory, StoryLocalization already exist — so
    and add/remove/enable/disable domains, mark one primary domain per
    Publication, and enforce global domain uniqueness. Branding/SEO/editorial
    JSONB edits **merge** (unknown keys preserved; AI/source facts never
-   overwritten).
+   overwritten). A **PublicationDomain lifecycle** keeps the invariant that an
+   ACTIVE Publication with domains has exactly one enabled primary: the first
+   domain auto-becomes primary; a disabled domain can never be primary;
+   disabling/removing the primary atomically promotes the oldest remaining
+   enabled domain (or is refused for an ACTIVE Publication with no replacement);
+   new Publications start INACTIVE and cannot be activated without an enabled
+   primary domain.
 2. **PublicationStory workflow** — attach a **real** canonical Story to a
    Publication and edit its per-Publication presentation (slug, headline,
    published summary, published "why it matters", featured, editorial priority,

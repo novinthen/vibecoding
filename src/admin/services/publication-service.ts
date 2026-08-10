@@ -150,6 +150,19 @@ export async function setPublicationStatus(
   const before = await publications.findById(id);
   if (!before) throw new NotFoundError('Publication not found.');
 
+  // Invariant: an ACTIVE Publication must have exactly one ENABLED primary
+  // domain (it is the resolvable public host). Refuse to activate without one.
+  if (status === 'ACTIVE') {
+    const primary = await publications.findEnabledPrimaryDomain(id);
+    if (!primary) {
+      throw new AdminValidationError(
+        'status',
+        'An ACTIVE Publication must have an enabled primary domain. Add or ' +
+          'enable a domain and set it primary before activating.',
+      );
+    }
+  }
+
   const updated = await publications.setStatus(id, status as PublicationStatus);
   if (!updated) throw new NotFoundError('Publication not found.');
 
@@ -166,6 +179,20 @@ export async function setPublicationStatus(
 }
 
 // --- Domains ---------------------------------------------------------------
+//
+// PublicationDomain lifecycle invariants (kept atomically inside the caller's
+// transaction):
+//
+//   I1. No DISABLED domain is ever primary.
+//   I2. At most one primary domain per Publication (DB partial unique index).
+//   I3. An ACTIVE Publication with at least one enabled domain has exactly one
+//       ENABLED primary domain.
+//
+// Editorial behaviour for losing the current primary (disable/remove): a
+// deterministic replacement (the oldest remaining ENABLED domain) is promoted
+// automatically. If there is no enabled replacement AND the Publication is
+// ACTIVE, the mutation is refused (deactivate first). A non-ACTIVE/DRAFT
+// Publication may be left with no primary (I3 only binds ACTIVE Publications).
 
 export async function addPublicationDomain(
   db: Db,
@@ -189,12 +216,23 @@ export async function addPublicationDomain(
     );
   }
 
+  // The FIRST domain of a Publication becomes primary automatically, regardless
+  // of the (omitted) checkbox, so a Publication never has domains without a
+  // primary. A later domain is primary only when explicitly requested — and then
+  // it must atomically replace the existing primary (I2), so clear it first.
+  const currentDomains = await publications.listDomains(publicationId);
+  const isFirst = currentDomains.length === 0;
+  const isPrimary = isFirst || values.isPrimary;
+  if (isPrimary && !isFirst) {
+    for (const d of currentDomains) {
+      if (d.is_primary) await publications.clearDomainPrimary(d.id);
+    }
+  }
+
   const created = await publications.addDomain({
     publicationId,
     domain: values.domain,
-    // First domain (or an explicit request) becomes primary. The partial unique
-    // index still guards the one-primary invariant.
-    isPrimary: values.isPrimary,
+    isPrimary,
     enabled: true,
   });
 
@@ -204,7 +242,11 @@ export async function addPublicationDomain(
     targetType: 'publication_domain',
     targetId: created.id,
     after: auditDomainView(created),
-    metadata: { role: actor.role, publication_id: publicationId },
+    metadata: {
+      role: actor.role,
+      publication_id: publicationId,
+      auto_primary: isFirst,
+    },
   });
   return created;
 }
@@ -222,6 +264,53 @@ async function requireDomainOfPublication(
   return domain;
 }
 
+/**
+ * When the current primary is about to be disabled or removed, promote a
+ * deterministic replacement (oldest enabled domain) so an ACTIVE Publication
+ * keeps exactly one enabled primary. Records the auto-promotion audit. Throws
+ * when no enabled replacement exists and the Publication is ACTIVE. Returns the
+ * promoted domain id, or null when there was nothing to promote.
+ */
+async function promoteReplacementPrimary(
+  db: Db,
+  actor: AdminSession,
+  publication: PublicationRow,
+  domainId: string,
+  reason: string,
+): Promise<string | null> {
+  const publications = new PublicationRepository(db);
+  const replacement = await publications.findReplacementEnabledDomain(
+    publication.id,
+    domainId,
+  );
+  if (!replacement) {
+    if (publication.status === 'ACTIVE') {
+      throw new AdminValidationError(
+        'domainId',
+        'This is the only enabled domain of an ACTIVE Publication and is its ' +
+          'primary. Add or enable another domain, or deactivate the ' +
+          'Publication, before disabling or removing it.',
+      );
+    }
+    return null;
+  }
+  await publications.setPrimaryDomain(replacement.id, publication.id);
+  await new AdminAuditLogRepository(db).record({
+    action: 'PUBLICATION_DOMAIN_SET_PRIMARY',
+    actorIdentifier: actor.username,
+    targetType: 'publication_domain',
+    targetId: replacement.id,
+    after: auditDomainView({ ...replacement, is_primary: true }),
+    metadata: {
+      role: actor.role,
+      publication_id: publication.id,
+      auto: true,
+      reason,
+    },
+  });
+  return replacement.id;
+}
+
 export async function setPublicationDomainEnabled(
   db: Db,
   actor: AdminSession,
@@ -231,14 +320,45 @@ export async function setPublicationDomainEnabled(
 ): Promise<PublicationDomainRow> {
   assertCanMutate(actor);
   const publications = new PublicationRepository(db);
+  const publication = await publications.findById(publicationId);
+  if (!publication) throw new NotFoundError('Publication not found.');
   const before = await requireDomainOfPublication(
     publications,
     publicationId,
     domainId,
   );
 
+  if (!enabled && before.is_primary) {
+    // Disabling the primary: promote a replacement (or refuse for ACTIVE with
+    // no replacement). A disabled domain must never stay primary (I1), so clear
+    // its flag whether or not a replacement was promoted.
+    await promoteReplacementPrimary(
+      db,
+      actor,
+      publication,
+      domainId,
+      'primary_disabled',
+    );
+    await publications.clearDomainPrimary(domainId);
+  }
+
   const updated = await publications.setDomainEnabled(domainId, enabled);
   if (!updated) throw new NotFoundError('Domain not found.');
+
+  // Enabling a domain when the Publication currently has no enabled primary
+  // (e.g. a DRAFT that lost its primary) makes this one primary, so the
+  // Publication is immediately activatable again.
+  let finalRow = updated;
+  if (enabled) {
+    const primary = await publications.findEnabledPrimaryDomain(publicationId);
+    if (!primary) {
+      const promoted = await publications.setPrimaryDomain(
+        domainId,
+        publicationId,
+      );
+      if (promoted) finalRow = promoted;
+    }
+  }
 
   await new AdminAuditLogRepository(db).record({
     action: enabled
@@ -247,11 +367,11 @@ export async function setPublicationDomainEnabled(
     actorIdentifier: actor.username,
     targetType: 'publication_domain',
     targetId: domainId,
-    before: { enabled: before.enabled },
-    after: { enabled: updated.enabled },
+    before: { enabled: before.enabled, is_primary: before.is_primary },
+    after: { enabled: finalRow.enabled, is_primary: finalRow.is_primary },
     metadata: { role: actor.role, publication_id: publicationId },
   });
-  return updated;
+  return finalRow;
 }
 
 export async function setPrimaryPublicationDomain(
@@ -262,7 +382,21 @@ export async function setPrimaryPublicationDomain(
 ): Promise<PublicationDomainRow> {
   assertCanMutate(actor);
   const publications = new PublicationRepository(db);
-  await requireDomainOfPublication(publications, publicationId, domainId);
+  const publication = await publications.findById(publicationId);
+  if (!publication) throw new NotFoundError('Publication not found.');
+  const domain = await requireDomainOfPublication(
+    publications,
+    publicationId,
+    domainId,
+  );
+
+  // A disabled domain must not become primary (I1) — it is not resolvable.
+  if (!domain.enabled) {
+    throw new AdminValidationError(
+      'domainId',
+      'A disabled domain cannot be made primary. Enable it first.',
+    );
+  }
 
   const updated = await publications.setPrimaryDomain(domainId, publicationId);
   if (!updated) throw new NotFoundError('Domain not found.');
@@ -286,11 +420,25 @@ export async function removePublicationDomain(
 ): Promise<void> {
   assertCanMutate(actor);
   const publications = new PublicationRepository(db);
+  const publication = await publications.findById(publicationId);
+  if (!publication) throw new NotFoundError('Publication not found.');
   const before = await requireDomainOfPublication(
     publications,
     publicationId,
     domainId,
   );
+
+  // Removing the primary: promote a replacement first, or refuse for an ACTIVE
+  // Publication with no enabled replacement.
+  if (before.is_primary) {
+    await promoteReplacementPrimary(
+      db,
+      actor,
+      publication,
+      domainId,
+      'primary_removed',
+    );
+  }
 
   await publications.removeDomain(domainId);
 

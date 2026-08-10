@@ -8,6 +8,7 @@ import {
   Badge,
   buttonClass,
   Card,
+  FormError,
   PageHeader,
   secondaryButtonClass,
 } from '../../../_components/ui';
@@ -30,6 +31,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 type Params = Promise<{ id: string }>;
+type Search = Promise<{ error?: string | string[] }>;
 
 function str(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
@@ -38,10 +40,14 @@ function str(obj: Record<string, unknown>, key: string): string {
 
 export default async function PublicationDetailPage({
   params,
+  searchParams,
 }: {
   readonly params: Params;
+  readonly searchParams: Search;
 }) {
   const { id } = await params;
+  const { error } = await searchParams;
+  const errorMessage = Array.isArray(error) ? error[0] : error;
   if (!isDatabaseConfigured()) notFound();
 
   const db = getDb();
@@ -74,6 +80,8 @@ export default async function PublicationDetailPage({
       />
 
       <div className="space-y-6">
+        {errorMessage ? <FormError message={errorMessage} /> : null}
+
         <Card title="Status">
           <div className="flex flex-wrap items-center gap-2">
             {nextStatuses.map((status) => (
@@ -137,7 +145,7 @@ export default async function PublicationDetailPage({
                               <Badge className="bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300">
                                 Primary
                               </Badge>
-                            ) : (
+                            ) : d.enabled ? (
                               <form action={setPrimaryDomainAction}>
                                 <input
                                   type="hidden"
@@ -156,6 +164,11 @@ export default async function PublicationDetailPage({
                                   Make primary
                                 </button>
                               </form>
+                            ) : (
+                              // A disabled domain cannot be primary (enable first).
+                              <span className="text-xs text-neutral-400">
+                                —
+                              </span>
                             )}
                           </td>
                           <td className="py-2 pr-3">

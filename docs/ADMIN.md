@@ -25,7 +25,11 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Publications** (`/admin/publications`, Stage 5B): list, create, edit, and
   activate/deactivate Publications (name, slug, default locale, timezone,
   branding, SEO description, editorial profile); add/remove/enable/disable
-  domains with a single primary per Publication and global domain uniqueness;
+  domains with a single primary per Publication and global domain uniqueness
+  (the first domain auto-becomes primary; a disabled domain is never primary;
+  disabling/removing the primary auto-promotes the oldest enabled replacement or
+  is refused for an ACTIVE Publication with none; new Publications start INACTIVE
+  and cannot be activated without an enabled primary domain);
   attach a **real** canonical Story to a Publication as a **PublicationStory**
   (per-Publication slug/headline/summary/why-it-matters/featured/priority/status
   — canonical Story facts are never edited); and manage **StoryLocalization**

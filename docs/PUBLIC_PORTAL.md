@@ -82,6 +82,23 @@ seam above. Highlights:
   audited): list/create/edit/(de)activate Publications; default locale, timezone,
   branding, SEO, and editorial profile; add/remove/enable/disable domains with a
   primary per Publication and global domain uniqueness.
+
+  **PublicationDomain lifecycle invariants** (enforced atomically per mutation):
+  - a **DISABLED** domain is never primary;
+  - **at most one** primary domain per Publication (DB partial unique index);
+  - an **ACTIVE** Publication with ≥1 enabled domain has **exactly one enabled
+    primary**.
+
+  Rules: the **first** domain of a Publication becomes primary automatically
+  (regardless of the checkbox); a later domain is primary only when explicitly
+  selected, atomically replacing the previous primary; a disabled domain cannot
+  be made primary. When the current primary is **disabled or removed**, a
+  deterministic replacement (the oldest remaining *enabled* domain) is promoted
+  automatically — and if there is **no** enabled replacement while the
+  Publication is **ACTIVE**, the mutation is refused (deactivate first).
+  Re-enabling a domain when the Publication has no primary promotes it. New
+  Publications are created **INACTIVE**; activation is refused unless an enabled
+  primary domain exists. A Publication with no domains may remain INACTIVE.
 - **PublicationStory** attaches a real canonical Story to a Publication and edits
   only per-Publication presentation (slug/headline/summary/why-it-matters/
   featured/priority/status). Canonical Story facts are never touched, and the

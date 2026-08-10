@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 
 import { requireMutatingAdmin } from '@/admin/auth/current-admin';
+import { AdminValidationError } from '@/admin/errors';
 import {
   addPublicationDomain,
   createPublication,
@@ -16,6 +17,32 @@ import {
 import { withTransaction } from '@/db/client';
 
 import { toActionState, type ActionState } from '../../_lib/action-result';
+
+/**
+ * Run a void (button-form) mutation and surface a business-rule violation as a
+ * friendly banner on the Publication page (via `?error=`), instead of an
+ * unhandled 500. Unexpected errors still propagate. `redirect` is called after
+ * the try/catch so its control-flow throw is never swallowed.
+ */
+async function runReporting(
+  publicationId: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  let errorMessage: string | null = null;
+  try {
+    await fn();
+  } catch (error) {
+    if (error instanceof AdminValidationError) errorMessage = error.message;
+    else throw error;
+  }
+  revalidatePath('/admin/publications');
+  revalidatePath(`/admin/publications/${publicationId}`);
+  if (errorMessage) {
+    redirect(
+      `/admin/publications/${publicationId}?error=${encodeURIComponent(errorMessage)}`,
+    );
+  }
+}
 
 /**
  * Publication + PublicationDomain server actions (Stage 5B).
@@ -81,11 +108,11 @@ export async function setPublicationStatusAction(
   const id = String(formData.get('id') ?? '');
   const status = String(formData.get('status') ?? '');
   if (!id) return;
-  await withTransaction((tx) =>
-    setPublicationStatus(tx, actor, id, { status }),
-  );
-  revalidatePath('/admin/publications');
-  revalidatePath(`/admin/publications/${id}`);
+  await runReporting(id, async () => {
+    await withTransaction((tx) =>
+      setPublicationStatus(tx, actor, id, { status }),
+    );
+  });
 }
 
 export async function addDomainAction(
@@ -116,10 +143,11 @@ export async function setDomainEnabledAction(
   const domainId = String(formData.get('domainId') ?? '');
   const enabled = formData.get('enabled') === 'true';
   if (!publicationId || !domainId) return;
-  await withTransaction((tx) =>
-    setPublicationDomainEnabled(tx, actor, publicationId, domainId, enabled),
-  );
-  revalidatePath(`/admin/publications/${publicationId}`);
+  await runReporting(publicationId, async () => {
+    await withTransaction((tx) =>
+      setPublicationDomainEnabled(tx, actor, publicationId, domainId, enabled),
+    );
+  });
 }
 
 export async function setPrimaryDomainAction(
@@ -129,10 +157,11 @@ export async function setPrimaryDomainAction(
   const publicationId = String(formData.get('publicationId') ?? '');
   const domainId = String(formData.get('domainId') ?? '');
   if (!publicationId || !domainId) return;
-  await withTransaction((tx) =>
-    setPrimaryPublicationDomain(tx, actor, publicationId, domainId),
-  );
-  revalidatePath(`/admin/publications/${publicationId}`);
+  await runReporting(publicationId, async () => {
+    await withTransaction((tx) =>
+      setPrimaryPublicationDomain(tx, actor, publicationId, domainId),
+    );
+  });
 }
 
 export async function removeDomainAction(formData: FormData): Promise<void> {
@@ -140,8 +169,9 @@ export async function removeDomainAction(formData: FormData): Promise<void> {
   const publicationId = String(formData.get('publicationId') ?? '');
   const domainId = String(formData.get('domainId') ?? '');
   if (!publicationId || !domainId) return;
-  await withTransaction((tx) =>
-    removePublicationDomain(tx, actor, publicationId, domainId),
-  );
-  revalidatePath(`/admin/publications/${publicationId}`);
+  await runReporting(publicationId, async () => {
+    await withTransaction((tx) =>
+      removePublicationDomain(tx, actor, publicationId, domainId),
+    );
+  });
 }

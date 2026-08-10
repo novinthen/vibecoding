@@ -23,7 +23,11 @@ import {
 } from '@/admin/services/story-localization-service';
 import { closePool, getPool, type Db } from '@/db/client';
 import { migrate } from '@/db/migrate';
-import { AdminAuditLogRepository, StoryRepository } from '@/domain';
+import {
+  AdminAuditLogRepository,
+  PublicationRepository,
+  StoryRepository,
+} from '@/domain';
 
 /**
  * Stage 5B admin service integration tests (real Postgres, DATABASE_URL-gated).
@@ -270,6 +274,260 @@ describe.skipIf(!hasDb)('Stage 5B publication admin (integration)', () => {
         expect(await auditCount(tx, 'PUBLICATION_DOMAIN_ADD')).toBe(1);
         expect(await auditCount(tx, 'PUBLICATION_DOMAIN_DISABLE')).toBe(1);
         expect(await auditCount(tx, 'PUBLICATION_DOMAIN_REMOVE')).toBe(1);
+      });
+    });
+  });
+
+  describe('domain primary invariant lifecycle', () => {
+    async function domains(tx: Db, pubId: string) {
+      return new PublicationRepository(tx).listDomains(pubId);
+    }
+
+    it('makes the first domain primary automatically even without the checkbox', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'fp',
+        });
+        const d = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'first.example.com',
+          // isPrimary omitted → still becomes primary because it is the first.
+        });
+        expect(d.is_primary).toBe(true);
+        expect(d.enabled).toBe(true);
+      });
+    });
+
+    it('does not make a second domain primary unless explicitly selected', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'sp',
+        });
+        const d1 = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'one.example.com',
+        });
+        const d2 = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'two.example.com',
+        });
+        expect(d2.is_primary).toBe(false);
+        const rows = await domains(tx, p.id);
+        expect(rows.find((d) => d.id === d1.id)?.is_primary).toBe(true);
+      });
+    });
+
+    it('adding a domain marked primary atomically replaces the previous primary', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'ap',
+        });
+        const d1 = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'one.example.com',
+        });
+        const d2 = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'two.example.com',
+          isPrimary: true,
+        });
+        const rows = await domains(tx, p.id);
+        expect(rows.find((d) => d.id === d2.id)?.is_primary).toBe(true);
+        expect(rows.find((d) => d.id === d1.id)?.is_primary).toBe(false);
+        expect(rows.filter((d) => d.is_primary)).toHaveLength(1);
+      });
+    });
+
+    it('refuses to make a disabled domain primary', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'dp',
+        });
+        await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'primary.example.com',
+        });
+        const d2 = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'second.example.com',
+        });
+        await setPublicationDomainEnabled(tx, ADMIN, p.id, d2.id, false);
+        await expect(
+          setPrimaryPublicationDomain(tx, ADMIN, p.id, d2.id),
+        ).rejects.toBeInstanceOf(AdminValidationError);
+      });
+    });
+
+    it('auto-promotes a deterministic replacement when the primary is disabled', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'pr',
+        });
+        const primary = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'primary.example.com',
+        });
+        const spare = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'spare.example.com',
+        });
+        await setPublicationStatus(tx, ADMIN, p.id, { status: 'ACTIVE' });
+
+        const disabled = await setPublicationDomainEnabled(
+          tx,
+          ADMIN,
+          p.id,
+          primary.id,
+          false,
+        );
+        expect(disabled.is_primary).toBe(false);
+        expect(disabled.enabled).toBe(false);
+        const rows = await domains(tx, p.id);
+        expect(rows.find((d) => d.id === spare.id)?.is_primary).toBe(true);
+        expect(rows.filter((d) => d.is_primary && d.enabled)).toHaveLength(1);
+        // The auto-promotion is audited.
+        expect(await auditCount(tx, 'PUBLICATION_DOMAIN_SET_PRIMARY')).toBe(1);
+      });
+    });
+
+    it('refuses to disable the only enabled primary of an ACTIVE publication', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'op',
+        });
+        const only = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'only.example.com',
+        });
+        await setPublicationStatus(tx, ADMIN, p.id, { status: 'ACTIVE' });
+        await expect(
+          setPublicationDomainEnabled(tx, ADMIN, p.id, only.id, false),
+        ).rejects.toBeInstanceOf(AdminValidationError);
+        // Nothing changed: still enabled + primary.
+        const rows = await domains(tx, p.id);
+        expect(rows[0]?.enabled).toBe(true);
+        expect(rows[0]?.is_primary).toBe(true);
+      });
+    });
+
+    it('auto-promotes a replacement when the primary is removed', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'rm',
+        });
+        const primary = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'primary.example.com',
+        });
+        const spare = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'spare.example.com',
+        });
+        await setPublicationStatus(tx, ADMIN, p.id, { status: 'ACTIVE' });
+        await removePublicationDomain(tx, ADMIN, p.id, primary.id);
+        const rows = await domains(tx, p.id);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.id).toBe(spare.id);
+        expect(rows[0]?.is_primary).toBe(true);
+      });
+    });
+
+    it('refuses to remove the only enabled primary of an ACTIVE publication', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'ro',
+        });
+        const only = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'only.example.com',
+        });
+        await setPublicationStatus(tx, ADMIN, p.id, { status: 'ACTIVE' });
+        await expect(
+          removePublicationDomain(tx, ADMIN, p.id, only.id),
+        ).rejects.toBeInstanceOf(AdminValidationError);
+      });
+    });
+
+    it('cannot activate a publication with no enabled primary domain', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'na',
+        });
+        // New publications start INACTIVE and have no domains.
+        expect(p.status).toBe('INACTIVE');
+        await expect(
+          setPublicationStatus(tx, ADMIN, p.id, { status: 'ACTIVE' }),
+        ).rejects.toBeInstanceOf(AdminValidationError);
+
+        // Add a domain (auto-primary, enabled) → activation now succeeds.
+        await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'ready.example.com',
+        });
+        const active = await setPublicationStatus(tx, ADMIN, p.id, {
+          status: 'ACTIVE',
+        });
+        expect(active.status).toBe('ACTIVE');
+      });
+    });
+
+    it('re-enabling a domain restores a primary when the publication has none', async () => {
+      await inRollbackTx(async (tx) => {
+        const p = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 're',
+        });
+        const d = await addPublicationDomain(tx, ADMIN, p.id, {
+          domain: 'solo.example.com',
+        });
+        // Publication is INACTIVE, so disabling the sole primary is allowed and
+        // leaves it with no primary.
+        await setPublicationDomainEnabled(tx, ADMIN, p.id, d.id, false);
+        let rows = await domains(tx, p.id);
+        expect(rows[0]?.is_primary).toBe(false);
+        // Re-enabling promotes it back to primary (no other primary exists).
+        const reEnabled = await setPublicationDomainEnabled(
+          tx,
+          ADMIN,
+          p.id,
+          d.id,
+          true,
+        );
+        expect(reEnabled.enabled).toBe(true);
+        expect(reEnabled.is_primary).toBe(true);
+        rows = await domains(tx, p.id);
+        expect(rows.filter((x) => x.is_primary)).toHaveLength(1);
+      });
+    });
+
+    it('keeps two publications completely independent', async () => {
+      await inRollbackTx(async (tx) => {
+        const a = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'i-a',
+        });
+        const b = await createPublication(tx, ADMIN, {
+          ...basePub,
+          slug: 'i-b',
+        });
+        const aPrimary = await addPublicationDomain(tx, ADMIN, a.id, {
+          domain: 'a1.example.com',
+        });
+        await addPublicationDomain(tx, ADMIN, a.id, {
+          domain: 'a2.example.com',
+        });
+        const bPrimary = await addPublicationDomain(tx, ADMIN, b.id, {
+          domain: 'b1.example.com',
+        });
+        await setPublicationStatus(tx, ADMIN, a.id, { status: 'ACTIVE' });
+        await setPublicationStatus(tx, ADMIN, b.id, { status: 'ACTIVE' });
+
+        // Disabling A's primary promotes A's spare and never touches B.
+        await setPublicationDomainEnabled(tx, ADMIN, a.id, aPrimary.id, false);
+        const bRows = await domains(tx, b.id);
+        expect(bRows).toHaveLength(1);
+        expect(bRows[0]?.id).toBe(bPrimary.id);
+        expect(bRows[0]?.is_primary).toBe(true);
+        expect(bRows[0]?.enabled).toBe(true);
+        // B still has exactly one enabled primary; B remains ACTIVE-valid.
+        expect(
+          await new PublicationRepository(tx).findEnabledPrimaryDomain(b.id),
+        ).not.toBeNull();
       });
     });
   });
