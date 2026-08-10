@@ -18,21 +18,45 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 5B — Multi-Publication Localisation.**
+**Stage 6 — AI Intelligence.**
 
-On top of the Stage 3 ingestion engine, Stage 4 admin, and the Stage 5 public
-portal, this repository now makes the public portal genuinely multi-publication
-and localisation-ready: one canonical intelligence backend powers multiple
-Publications → multiple domains → multiple locales → publication-specific
-editorial presentation. Canonical Article/Story facts stay global and are never
-duplicated; localisation content for one Publication never leaks into another.
-It remains honest about the current data state — no fake Stories are created to
-demonstrate localisation. Full details are in
-[`docs/PUBLIC_PORTAL.md`](docs/PUBLIC_PORTAL.md).
+On top of the Stage 3 ingestion engine, Stage 4 admin, the Stage 5 public
+portal, and the Stage 5B multi-publication localisation layer, this repository
+now adds a **safe, versioned AI-enrichment layer** for canonical Articles. AI
+helps interpret source facts without becoming the source of truth:
 
-Stage 5B added no schema migrations — Publication, PublicationDomain,
-PublicationStory, and StoryLocalization already exist (migrations `0003`,
-`0009`).
+```
+Article source facts → provider-neutral AI request → strict-schema validation
+  → versioned enrichment record → admin review → (later, separately approved)
+  controlled promotion
+```
+
+Key properties:
+
+- **Provider-neutral boundary** (`src/ai/provider`) with a deterministic
+  `FakeProvider` (tests/local smoke, no network) and a thin `AnthropicProvider`
+  over `fetch` (no vendor SDK). API keys are server-only.
+- **Strict structured output** — every reply is machine-validated against a
+  `.strict()` schema; malformed/partial output is rejected and recorded, never
+  silently accepted.
+- **Prompt-injection boundary** — trusted instructions and untrusted Article text
+  are kept strictly separate; Article content is data, never instructions.
+- **Versioned & auditable** — each attempt (success, invalid output, provider
+  error) is an immutable new version in `article_enrichments`; re-running never
+  destroys prior provenance.
+- **Advisory only** — AI never overwrites source facts, never publishes, and
+  never creates canonical Topics/Entities. Suggestions are candidates until an
+  explicit review/matching layer resolves them.
+- **Optional** — with no provider configured, ingestion, admin, and public
+  rendering behave exactly as before.
+
+Enrichment is triggered **manually** by a mutating admin from the Article detail
+page (no production scheduling). See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
+[`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) (AI Architecture), and
+[`docs/ADMIN.md`](docs/ADMIN.md).
+
+Stage 6 adds one migration (`0014`) that extends the existing
+`article_enrichments` table in place — no new table.
 
 Public routes (all under the shared portal chrome):
 
@@ -170,8 +194,12 @@ directly.
   `APP_ENV` variable, which is distinct from `NODE_ENV`).
 - `DATABASE_URL` (and optionally `DIRECT_URL`) configure the PostgreSQL/Supabase
   connection. They are optional for building and running the app, but required
-  for the `db:*` commands and database integration tests. AI provider variables
-  remain reserved for later stages.
+  for the `db:*` commands and database integration tests.
+- **AI enrichment (Stage 6)** is optional and server-only: `AI_PROVIDER`
+  (`fake` | `anthropic`), and for the live provider `AI_API_KEY` + `AI_MODEL`
+  (plus optional `AI_BASE_URL`). With none set, ingestion, admin, and public
+  rendering behave exactly as before and the admin enrichment trigger is hidden.
+  Keys are never exposed to the browser or placed in a prompt.
 
 ## Database
 

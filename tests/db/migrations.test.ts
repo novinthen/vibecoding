@@ -80,4 +80,17 @@ describe('migration files', () => {
       /articles_source_url_hash_key[\s\S]*?WHERE url_hash IS NOT NULL/,
     );
   });
+
+  it('versions AI enrichment on the existing table (no new enrichment table)', () => {
+    const sql = allSql();
+    // Stage 6 extends article_enrichments in place rather than adding a table.
+    const created = sql.match(/CREATE TABLE article_enrichments \(/g) ?? [];
+    expect(created).toHaveLength(1);
+    // The versioning + status columns and the per-Article uniqueness invariant.
+    expect(sql).toContain('ADD COLUMN enrichment_version integer');
+    expect(sql).toContain(
+      "ADD COLUMN status text NOT NULL DEFAULT 'SUCCEEDED'",
+    );
+    expect(sql).toContain('UNIQUE (article_id, enrichment_version)');
+  });
 });

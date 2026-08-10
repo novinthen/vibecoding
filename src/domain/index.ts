@@ -45,6 +45,10 @@ export {
   type CreateEntityInput,
 } from './repositories/entity-repository';
 export {
+  ArticleEnrichmentRepository,
+  type CreateEnrichmentInput,
+} from './repositories/article-enrichment-repository';
+export {
   PublicationRepository,
   type CreatePublicationInput,
   type UpdatePublicationInput,

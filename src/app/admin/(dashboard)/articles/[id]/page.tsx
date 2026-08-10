@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
 
+import { aiConfigured } from '@/ai';
+import { getArticleEnrichmentReview } from '@/admin/services/enrichment-service';
 import {
   AdminAuditLogRepository,
   ArticleRepository,
@@ -17,6 +19,9 @@ import { DatabaseUnavailable, EmptyState } from '../../../_components/notices';
 import { ExternalUrl } from '../../../_components/untrusted';
 import { getDb, isDatabaseConfigured } from '../../../_lib/db';
 import { ArticleStatusForm } from '../status-form';
+
+import { EnrichmentReview } from './enrichment-review';
+import { EnrichmentTriggerForm } from './enrichment-form';
 
 export default async function ArticleDetailPage({
   params,
@@ -38,14 +43,16 @@ export default async function ArticleDetailPage({
   const article = await new ArticleRepository(db).findById(id);
   if (!article) notFound();
 
-  const [source, audit] = await Promise.all([
+  const [source, audit, enrichmentReview] = await Promise.all([
     new SourceRepository(db).findById(article.source_id),
     new AdminAuditLogRepository(db).listRecent({
       targetType: 'article',
       targetId: id,
       limit: 10,
     }),
+    getArticleEnrichmentReview(db, id),
   ]);
+  const aiReady = aiConfigured();
 
   return (
     <>
@@ -131,11 +138,24 @@ export default async function ArticleDetailPage({
               />
             </dl>
           </Card>
+
+          <EnrichmentReview review={enrichmentReview} />
         </div>
 
         <div className="space-y-4">
           <Card title="Editorial status">
             <ArticleStatusForm id={article.id} current={article.status} />
+          </Card>
+
+          <Card title="AI enrichment">
+            {aiReady ? (
+              <EnrichmentTriggerForm id={article.id} />
+            ) : (
+              <p className="text-sm text-neutral-500">
+                AI enrichment is not configured for this deployment. Source
+                Articles and public rendering are unaffected.
+              </p>
+            )}
           </Card>
 
           <Card title="Audit trail">

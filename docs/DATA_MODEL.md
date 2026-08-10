@@ -413,7 +413,7 @@ Top-level Topics are editorially controlled.
 
 Stores derived AI output separately from Article source facts.
 
-Recommended fields:
+Base fields:
 
 - id
 - article_id
@@ -431,7 +431,32 @@ Recommended fields:
 - structured_output
 - created_at
 
-This design supports reprocessing and auditability.
+## Stage 6 versioning & provenance additions (migration `0014`)
+
+Stage 6 extends this table **in place** (no new table) so each model/prompt run
+is an immutable, versioned attempt:
+
+- `enrichment_version` — monotonic per-Article version; re-running creates a new
+  version and never overwrites a prior one. `UNIQUE (article_id,
+  enrichment_version)`.
+- `schema_version` — output-schema version the row was validated against.
+- `status` — `SUCCEEDED` | `INVALID_OUTPUT` | `PROVIDER_ERROR`. Every attempt,
+  including failures, is recorded.
+- `relevance` — advisory classification `RELEVANT` | `MAYBE_RELEVANT` |
+  `IRRELEVANT` | `UNCLASSIFIED` (UNCLASSIFIED is system-assigned on failure).
+- `relevance_reason` — short justification.
+- `suggested_topics`, `suggested_entities` (JSONB) — advisory candidates only;
+  never canonical. A separate deterministic matching layer resolves them.
+- `usage` (JSONB) — token/cost metadata when the provider reports it.
+- `generated_at` — when the provider produced the output.
+- `validation_error` — set when `status = INVALID_OUTPUT`.
+- `error_code`, `error_message` — set when `status = PROVIDER_ERROR` (classified
+  retryable/non-retryable).
+
+This design supports reprocessing and auditability. AI output here is
+**advisory**: it is never a source fact, is machine-validated before it is
+trusted, and is never published or promoted into a canonical Story/editorial
+field automatically — promotion is a separate, explicit, approved workflow.
 
 ---
 

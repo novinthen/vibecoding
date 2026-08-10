@@ -1,11 +1,13 @@
 import type {
   ArticleStatus,
   AuthorityTier,
+  EnrichmentStatus,
   EntityType,
   HealthStatus,
   LocalizationStatus,
   PublicationStatus,
   PublicationStoryStatus,
+  RelevanceClassification,
   SourceFetchStatus,
   SourceType,
   StoryStatus,
@@ -200,6 +202,69 @@ export interface EntityRow {
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * One suggested Topic candidate produced by AI enrichment. A candidate is NEVER
+ * a canonical Topic: it is raw advisory output. `slug` is the model's guess only;
+ * canonical resolution happens in the deterministic matching layer.
+ */
+export interface SuggestedTopic {
+  name: string;
+  slug: string | null;
+  confidence: number | null;
+}
+
+/** One suggested Entity/tool/company candidate produced by AI enrichment. */
+export interface SuggestedEntity {
+  name: string;
+  entity_type: EntityType | null;
+  confidence: number | null;
+}
+
+/** Token/cost metadata reported by a provider for one enrichment call. */
+export interface EnrichmentUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * One versioned ArticleEnrichment row — AI-derived output kept strictly separate
+ * from canonical Article source facts (never overwrites them). Each attempt is an
+ * immutable version; re-running creates a new one, preserving prior provenance.
+ * `structured_output` holds the raw parsed model result for audit/debugging, even
+ * for failed/invalid attempts. AI output here is advisory: it is not published or
+ * promoted into any canonical field by its mere existence.
+ */
+export interface ArticleEnrichmentRow {
+  id: string;
+  article_id: string;
+  model_provider: string;
+  model_name: string;
+  prompt_name: string | null;
+  prompt_version: string | null;
+  schema_version: string | null;
+  enrichment_version: number;
+  status: EnrichmentStatus;
+  relevance: RelevanceClassification | null;
+  relevance_reason: string | null;
+  summary: string | null;
+  why_it_matters: string | null;
+  relevance_score: number | null;
+  importance_score: number | null;
+  technical_depth: number | null;
+  novelty_score: number | null;
+  confidence: number | null;
+  suggested_topics: SuggestedTopic[];
+  suggested_entities: SuggestedEntity[];
+  usage: EnrichmentUsage | null;
+  structured_output: Record<string, unknown> | null;
+  validation_error: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  generated_at: string;
+  created_at: string;
 }
 
 /**

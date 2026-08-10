@@ -164,3 +164,45 @@ export const TRANSLATION_SOURCES = [
 ] as const;
 export const translationSourceSchema = z.enum(TRANSLATION_SOURCES);
 export type TranslationSource = z.infer<typeof translationSourceSchema>;
+
+/**
+ * Outcome of one AI enrichment attempt (Stage 6). Mirrors the CHECK constraint
+ * on article_enrichments.status. Every attempt is persisted as its own version:
+ * SUCCEEDED = validated structured output; INVALID_OUTPUT = provider replied but
+ * failed strict schema validation (raw kept for audit); PROVIDER_ERROR = the
+ * provider call itself failed (misconfigured, unavailable, rate-limited, etc.).
+ */
+export const ENRICHMENT_STATUSES = [
+  'SUCCEEDED',
+  'INVALID_OUTPUT',
+  'PROVIDER_ERROR',
+] as const;
+export const enrichmentStatusSchema = z.enum(ENRICHMENT_STATUSES);
+export type EnrichmentStatus = z.infer<typeof enrichmentStatusSchema>;
+
+/**
+ * Advisory relevance classification for the vibe-coding domain (Stage 6). Mirrors
+ * the CHECK constraint on article_enrichments.relevance. The model may only
+ * return the first three; UNCLASSIFIED is assigned by the system to failed or
+ * unvalidated attempts. A RELEVANT classification is advisory and NEVER publishes
+ * an Article on its own — promotion is a separate, explicit, approved workflow.
+ */
+export const RELEVANCE_CLASSIFICATIONS = [
+  'RELEVANT',
+  'MAYBE_RELEVANT',
+  'IRRELEVANT',
+  'UNCLASSIFIED',
+] as const;
+export const relevanceClassificationSchema = z.enum(RELEVANCE_CLASSIFICATIONS);
+export type RelevanceClassification = z.infer<
+  typeof relevanceClassificationSchema
+>;
+
+/** The relevance values a model is permitted to return (excludes UNCLASSIFIED). */
+export const MODEL_RELEVANCE_VALUES = [
+  'RELEVANT',
+  'MAYBE_RELEVANT',
+  'IRRELEVANT',
+] as const;
+export const modelRelevanceSchema = z.enum(MODEL_RELEVANCE_VALUES);
+export type ModelRelevance = z.infer<typeof modelRelevanceSchema>;
