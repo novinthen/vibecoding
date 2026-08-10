@@ -251,10 +251,17 @@ describe.skipIf(!hasDb)('enrichArticle (integration)', () => {
     const entitySlug = `match-tool-${suffix}`;
     const pool = getPool();
     try {
+      // Create the matching Topic as a CHILD of an existing top-level Topic —
+      // never a new top-level one — so the global "exactly 12 top-level Topics"
+      // invariant asserted by other (concurrently-running) integration test files
+      // is not disturbed. Suggestion matching is by slug, independent of parent.
+      const parent = await pool.query<{ id: string }>(
+        'SELECT id FROM topics WHERE parent_id IS NULL ORDER BY slug LIMIT 1',
+      );
       await new TopicRepository(pool).create({
         name: `Agents ${suffix}`,
         slug: topicSlug,
-        parentId: null as unknown as string,
+        parentId: parent.rows[0]!.id,
       });
       await new EntityRepository(pool).create({
         entityType: 'PRODUCT',
