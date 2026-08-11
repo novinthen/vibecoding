@@ -78,6 +78,7 @@ export async function createPublicationStory(
       publishedWhyItMatters: values.publishedWhyItMatters ?? null,
       featured: values.featured,
       editorialPriority: values.editorialPriority,
+      suppressRanking: false,
     },
   });
 
@@ -127,6 +128,7 @@ export async function updatePublicationStory(
     publishedWhyItMatters: values.publishedWhyItMatters ?? null,
     featured: values.featured,
     editorialPriority: values.editorialPriority,
+    suppressRanking: before.suppress_ranking, // Preserve existing value
   });
   if (!updated) throw new NotFoundError('PublicationStory not found.');
 

@@ -67,6 +67,8 @@ export interface PublicationStoryRow {
   published_why_it_matters: string | null;
   featured: boolean;
   editorial_priority: number;
+  /** Stage 8: exclude from ranked lists without unpublishing (detail page remains accessible). */
+  suppress_ranking: boolean;
   published_at: string | null;
   created_at: string;
   updated_at: string;
