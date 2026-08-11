@@ -8,7 +8,8 @@ import {
   moveArticleBetweenStories,
   setStoryReviewState,
 } from '@/admin/services/clustering-service';
-import { withTransaction } from '@/db/client';
+import { AdminRankingService } from '@/admin/ranking-admin-service';
+import { getPool, withTransaction } from '@/db/client';
 
 import { toActionState, type ActionState } from '../../../_lib/action-result';
 
@@ -76,4 +77,29 @@ export async function moveArticleAction(
   revalidatePath(`/admin/stories/${fromStoryId}`);
   revalidatePath(`/admin/stories/${toStoryId}`);
   return { ok: true, message: 'Article moved.' };
+}
+
+/** Trigger ranking calculation for a Story (audited). */
+export async function triggerRankingAction(
+  storyId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const actor = await requireMutatingAdmin();
+  const publicationId = formData.get('publicationId')?.toString() || null;
+  const force = formData.get('force') === 'true';
+
+  try {
+    const rankingService = new AdminRankingService(getPool());
+    await rankingService.triggerRanking(
+      storyId,
+      publicationId,
+      actor.username,
+      force,
+    );
+  } catch (error) {
+    return toActionState(error);
+  }
+  revalidatePath(`/admin/stories/${storyId}`);
+  return { ok: true, message: 'Ranking calculated.' };
 }

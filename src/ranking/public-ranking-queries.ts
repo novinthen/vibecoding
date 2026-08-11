@@ -161,7 +161,8 @@ export async function listPublishedStoriesForTopicRanked(
        AND ps.suppress_ranking = false
        AND s.primary_topic_id = $2
      ORDER BY
-       COALESCE(r.calculated_score, 0) + (ps.editorial_priority * 0.1) DESC,
+       -- Use ranking score directly (editorial adjustment already applied during calculation)
+       COALESCE(r.calculated_score, 0) DESC,
        ps.featured DESC,
        s.last_activity_at DESC NULLS LAST
      LIMIT $3 OFFSET $4`,

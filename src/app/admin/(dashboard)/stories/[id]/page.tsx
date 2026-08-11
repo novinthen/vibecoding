@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 
 import { getStoryClusteringView } from '@/admin/services/clustering-service';
+import { AdminRankingService } from '@/admin/ranking-admin-service';
 import { AdminAuditLogRepository } from '@/domain';
 import type { ClusteringDecisionRow } from '@/domain/types';
 
@@ -20,6 +21,7 @@ import {
   MoveArticleForm,
   ReviewStateForm,
 } from './story-actions';
+import { TriggerRankingButton } from './ranking-card';
 
 export default async function StoryDetailPage({
   params,
@@ -40,6 +42,12 @@ export default async function StoryDetailPage({
   const view = await getStoryClusteringView(db, id);
   if (!view) notFound();
   const { story, members, decisions, sourceCount } = view;
+
+  // Fetch ranking information
+  const rankingService = new AdminRankingService(db);
+  const currentRanking = await rankingService.getCurrentRanking(id, null);
+  const rankingHistory = await rankingService.getRankingHistory(id, null, 5);
+
   const audit = await new AdminAuditLogRepository(db).listRecent({
     targetType: 'story',
     targetId: id,
@@ -155,6 +163,86 @@ export default async function StoryDetailPage({
         </div>
 
         <div className="space-y-4">
+          <Card title="Ranking">
+            {currentRanking ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-2xl font-bold">
+                    {currentRanking.calculated_score.toFixed(3)}
+                  </div>
+                  <div className="text-xs text-neutral-500">
+                    {currentRanking.ranking_method}/{currentRanking.ranking_version} ·{' '}
+                    {formatTimestamp(currentRanking.calculated_at)}
+                  </div>
+                </div>
+
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Freshness</span>
+                    <span className="font-mono">{currentRanking.signals.freshness.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Source Diversity</span>
+                    <span className="font-mono">{currentRanking.signals.sourceDiversity.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Source Authority</span>
+                    <span className="font-mono">{currentRanking.signals.sourceAuthority.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Story Activity</span>
+                    <span className="font-mono">{currentRanking.signals.storyActivity.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Novelty</span>
+                    <span className="font-mono">{currentRanking.signals.novelty.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">AI Importance</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.aiImportance != null
+                        ? currentRanking.signals.aiImportance.toFixed(2)
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-t border-neutral-200 pt-1 dark:border-neutral-800">
+                    <span className="text-neutral-500">Editorial Adj.</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.editorialAdjustment >= 0 ? '+' : ''}
+                      {currentRanking.signals.editorialAdjustment.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {rankingHistory.length > 1 && (
+                  <details className="text-sm">
+                    <summary className="cursor-pointer text-neutral-500">
+                      {rankingHistory.length} version(s)
+                    </summary>
+                    <ul className="mt-2 space-y-1">
+                      {rankingHistory.slice(1).map((r) => (
+                        <li
+                          key={r.id}
+                          className="rounded bg-neutral-50 px-2 py-1 font-mono text-xs dark:bg-neutral-950"
+                        >
+                          {r.calculated_score.toFixed(3)} ·{' '}
+                          {formatTimestamp(r.calculated_at)}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
+                <TriggerRankingButton storyId={story.id} />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <EmptyState message="No ranking calculated yet." />
+                <TriggerRankingButton storyId={story.id} />
+              </div>
+            )}
+          </Card>
+
           <Card title="Review state">
             <ReviewStateForm storyId={story.id} current={story.review_state} />
           </Card>
