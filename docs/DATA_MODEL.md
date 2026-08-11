@@ -694,3 +694,71 @@ Editorial controls (`featured`, `editorial_priority`, `suppress_ranking`) are ap
 
 ---
 
+## Stage 9A — Job Orchestration
+
+### job_runs
+
+Structured summaries of automated job executions for observability and operational history.
+
+**Schema:**
+- `id` (UUID, primary key)
+- `job_name` (text): Job identifier (ingest, enrich, cluster, rank, pipeline)
+- `status` (text): RUNNING, SUCCEEDED, PARTIAL, FAILED, SKIPPED
+- `started_at` (timestamptz): When the job began
+- `finished_at` (timestamptz, nullable): When the job completed
+- `duration_ms` (integer, nullable): Execution time in milliseconds
+- `attempted` (integer): Total items attempted (Sources/Articles/Stories)
+- `succeeded` (integer): Items successfully processed
+- `skipped` (integer): Items skipped (already current, ineligible, or job-level skip)
+- `failed` (integer): Items that failed
+- `retryable_failures` (integer): Subset of failures that are retryable (network, rate-limit)
+- `error_summary` (text, nullable): Human-readable summary of failures (first few errors + counts)
+- `metadata` (jsonb, nullable): Structured context (batch limits, provider info, failure details)
+- `created_at` (timestamptz): Row creation timestamp
+
+**Indexes:**
+- `idx_job_runs_status_running`: `(job_name, started_at DESC) WHERE status = 'RUNNING'` — currently running jobs
+- `idx_job_runs_job_status_finished`: `(job_name, status, finished_at DESC NULLS LAST)` — last successful run per job
+- `idx_job_runs_started_at_desc`: `(started_at DESC)` — recent run history
+
+**Status Semantics:**
+- `RUNNING`: Job is executing (lock held)
+- `SUCCEEDED`: All items processed successfully
+- `PARTIAL`: Some items failed, but job completed
+- `FAILED`: Systemic error (job could not run)
+- `SKIPPED`: Lock was held, job did not execute (overlap prevention)
+
+**Job-Level Skip vs Item-Level Skip:**
+- `status = 'SKIPPED'` means the entire job was skipped (lock held)
+- `skipped` counter: items skipped within a run (already current, ineligible)
+- When `status = 'SKIPPED'`, the `skipped` counter is typically 1 (the job itself)
+
+**Observability:**
+No unbounded logs stored. Structured summaries only. Operators inspect full logs via stdout/log aggregator.
+
+**Operational Queries:**
+```sql
+-- Currently running jobs
+SELECT * FROM job_runs WHERE status = 'RUNNING' ORDER BY started_at DESC;
+
+-- Last successful run for each job
+SELECT DISTINCT ON (job_name) *
+FROM job_runs
+WHERE status = 'SUCCEEDED'
+ORDER BY job_name, finished_at DESC;
+
+-- Recent overlap attempts
+SELECT * FROM job_runs WHERE status = 'SKIPPED' ORDER BY started_at DESC LIMIT 20;
+
+-- Stuck jobs (running > 1 hour)
+SELECT * FROM job_runs
+WHERE status = 'RUNNING' AND started_at < NOW() - INTERVAL '1 hour';
+```
+
+**Invariants:**
+- Append-only (no updates after completion)
+- Every job run creates exactly one row (even on lock refusal)
+- Parent pipeline creates 1 row; child stages create 1 row each
+- No automatic cleanup (retention policy TBD)
+
+---

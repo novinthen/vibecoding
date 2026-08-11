@@ -78,9 +78,14 @@ export async function tryAcquireJobLock(
               JOB_LOCK_NAMESPACE,
               lockKey,
             ]);
-          } finally {
-            // Always return the client to the pool, even if unlock fails.
+            // Unlock succeeded; return client to pool normally.
             client.release();
+          } catch (error) {
+            // CRITICAL: If unlock fails, the session may still hold the lock.
+            // We MUST NOT return it to the pool as a healthy connection.
+            // Destroy the client to force a new session on next acquire.
+            client.release(error as Error);
+            throw error;
           }
         },
       };

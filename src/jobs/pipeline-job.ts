@@ -116,15 +116,29 @@ export async function runPipelineJob(
 
 /**
  * Determine if pipeline should stop based on stage outcome and policy.
- * Stops on FAILED (systemic). SKIPPED (overlap) is not a failure.
- * Optionally stops on PARTIAL if stopOnStageFailure is true.
+ *
+ * CRITICAL: Pipeline MUST stop if a required stage is SKIPPED (lock held).
+ * Continuing would violate dependency ordering (ingest → enrich → cluster → rank).
+ *
+ * Example failure scenario if we continue:
+ *   standalone ingestion running
+ *   → pipeline starts
+ *   → pipeline ingestion SKIPPED (lock held)
+ *   → pipeline enrichment starts IMMEDIATELY
+ *   → standalone ingestion still creating Articles
+ *   → enrichment misses those Articles (dependency race)
+ *
+ * Stop conditions:
+ * - SKIPPED: required stage lock is held, cannot proceed
+ * - FAILED: systemic error (not partial item failures)
+ * - PARTIAL: optionally stop if stopOnStageFailure=true
  */
 function shouldStopPipeline(
   outcome: JobOutcome,
   stopOnStageFailure: boolean = false,
 ): boolean {
-  // SKIPPED means the stage lock was held; not a failure, just overlap prevention.
-  if (outcome.result.status === 'SKIPPED') return false;
+  // SKIPPED means the stage lock was held; we MUST stop (dependency ordering).
+  if (outcome.result.status === 'SKIPPED') return true;
 
   // FAILED is a systemic error (not partial item failures).
   if (outcome.kind === 'FAILED') return true;

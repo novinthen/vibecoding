@@ -472,3 +472,156 @@ RankingEngine reuses recent rankings (< 1 hour, same version). Force flag bypass
 
 ---
 
+## Stage 9A — Job Orchestration & Production Automation
+
+### Architecture
+
+Bounded, safe, repeatable automation for the intelligence pipeline without manual intervention.
+
+```
+External Scheduler (cron/Vercel/GitHub Actions)
+  → CLI: npm run jobs:pipeline
+  → runJob(jobName, workFn)
+      → tryAcquireJobLock (dedicated PoolClient)
+      → persist job_run (RUNNING)
+      → execute: ingest → enrich → cluster → rank
+      → persist outcome (SUCCEEDED/PARTIAL/FAILED/SKIPPED)
+      → release lock
+  → next scheduled run
+```
+
+### Job Types
+
+1. **Ingestion** — processes enabled Sources (default: 50), respects health
+2. **Enrichment** — processes unenriched Articles (default: 100)
+3. **Clustering** — processes unclustered Articles (default: 50)
+4. **Ranking** — processes ACTIVE Stories (default: 100)
+5. **Pipeline** — orchestrates full sequence with per-stage locks
+
+### Session-Correct Advisory Locks
+
+**Critical invariant:** Lock acquire and release must use the SAME PostgreSQL session.
+
+```typescript
+// Acquire dedicated PoolClient for lock lifetime
+const client = await pool.connect();
+const result = await client.query('SELECT pg_try_advisory_lock($1, $2)', [namespace, key]);
+
+if (acquired) {
+  return {
+    client,
+    jobName,
+    async release() {
+      try {
+        await client.query('SELECT pg_advisory_unlock($1, $2)', [namespace, key]);
+        client.release(); // Normal return to pool
+      } catch (error) {
+        client.release(error); // Destroy connection (lock may still be held)
+        throw error;
+      }
+    }
+  };
+}
+```
+
+**Why:** Pool.query() may execute on different connections. Returning a connection whose unlock failed would leak the advisory lock.
+
+**Guarantee:** Crashed jobs automatically release locks when connection terminates.
+
+### Pipeline Stage Locks & Dependency Ordering
+
+**Critical invariant:** Pipeline MUST stop if a required stage lock is held.
+
+Continuing would violate dependency ordering:
+- standalone ingestion running
+- pipeline starts
+- pipeline ingestion SKIPPED (lock held)
+- pipeline enrichment starts IMMEDIATELY ❌
+- standalone ingestion still creating Articles
+- enrichment misses those Articles (dependency race)
+
+**Correct behavior:**
+1. Each stage runs through `runJob()` with its own lock
+2. If stage lock is held: record SKIPPED, STOP pipeline
+3. Downstream stages DO NOT execute
+4. Parent pipeline reports PARTIAL/FAILED (not SUCCEEDED)
+
+### Bounded Execution
+
+Every job enforces finite batch limits:
+- Ingestion: **50 Sources** (was unbounded)
+- Enrichment: **100 Articles**
+- Clustering: **50 Articles**
+- Ranking: **100 Stories**
+- Explicit ID lists: capped to 100-200
+
+No infinite loops possible. No unbounded network/DB operations.
+
+### Job Persistence & Observability
+
+`job_runs` table stores structured summaries:
+- Status: RUNNING, SUCCEEDED, PARTIAL, FAILED, SKIPPED
+- Timing: started_at, finished_at, duration_ms
+- Counts: attempted, succeeded, skipped, failed, retryable_failures
+- Error summary (human-readable, first few errors)
+- Metadata (structured context, bounded failure details)
+
+Operational queries:
+- Currently running: `SELECT * FROM job_runs WHERE status = 'RUNNING'`
+- Last success: `SELECT * FROM job_runs WHERE job_name = 'ingest' AND status = 'SUCCEEDED' ORDER BY finished_at DESC LIMIT 1`
+- Overlaps: `SELECT * FROM job_runs WHERE status = 'SKIPPED' ORDER BY started_at DESC`
+
+Admin UI: `/admin/jobs` shows recent 50 runs (read-only, all roles).
+
+### Transaction Discipline
+
+**Critical invariant:** No DB transaction spans network/AI calls.
+
+Jobs use short transactions for persistence only:
+1. Acquire lock (no transaction)
+2. Persist job_run start (short transaction)
+3. Execute work (calls Stage 3/6/7/8 engines, which manage their own transactions)
+4. Persist job_run outcome (short transaction)
+5. Release lock (no transaction)
+
+Network/AI calls happen OUTSIDE transactions. Advisory locks survive transaction boundaries (session-scoped).
+
+### Scheduling
+
+Jobs triggered via CLI:
+```bash
+npm run jobs:ingest    # Bounded ingestion
+npm run jobs:enrich    # Bounded enrichment
+npm run jobs:cluster   # Bounded clustering
+npm run jobs:rank      # Bounded ranking
+npm run jobs:pipeline  # Full sequence
+```
+
+External scheduler options:
+- **Vercel Cron** — platform cron calling API route (future)
+- **GitHub Actions** — scheduled workflow calling CLI
+- **System cron** — `crontab` entries calling `npm run jobs:*`
+- **Inngest** — durable workflows (future)
+
+Recommended cadences:
+- Ingestion: every 5-15 minutes
+- Enrichment: every 10-30 minutes
+- Clustering: every 10-30 minutes
+- Ranking: every 10-30 minutes
+
+Avoid :00 and :30 minute marks (spread load across minutes).
+
+### Invariants
+
+1. **No auto-publishing** — PublicationStory remains editorial boundary
+2. **Article provenance preserved** — jobs never overwrite source facts
+3. **REVIEWED/LOCKED protection** — clustering never auto-modifies protected Stories
+4. **Idempotent** — re-running is safe (skips already-current items)
+5. **Isolated failures** — one bad item doesn't crash batch
+6. **Overlap prevention** — advisory locks serialize same-job runs
+7. **Observable** — every run logged to job_runs (including SKIPPED)
+8. **Bounded** — finite batch limits enforced
+9. **Session-correct locks** — dedicated PoolClient for lock lifetime
+10. **Dependency ordering** — pipeline stops if required stage lock is held
+
+---

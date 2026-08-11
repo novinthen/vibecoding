@@ -219,3 +219,45 @@ Editorial adjustments are applied during ranking calculation, not in public SQL 
 
 ---
 
+## Stage 9A — Job Runs
+
+### Job Runs Page (`/admin/jobs`)
+
+Read-only operational visibility into automated job execution history.
+
+**Access:** All authenticated admins (VIEWER, EDITOR, ADMIN).
+
+**Displays:**
+- Recent 50 job runs (all job types: ingest, enrich, cluster, rank, pipeline)
+- Job name (ingest, enrich, cluster, rank, pipeline)
+- Status badge (color-coded: RUNNING=blue, SUCCEEDED=green, PARTIAL=yellow, FAILED=red, SKIPPED=gray)
+- Started time (relative: "5m ago" or absolute: "Aug 11, 2:30pm")
+- Duration (formatted: "2m 30s" or "—" if running)
+- Results: succeeded/attempted, failed count, skipped count
+- Error summary (first ~100 chars, truncated)
+
+**No manual triggers:** Job runs page is read-only. Jobs are triggered via:
+- External scheduler (cron/Vercel Cron/GitHub Actions)
+- CLI: `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`
+
+**Status Semantics:**
+- **RUNNING** — Job is executing (lock held)
+- **SUCCEEDED** — All items processed successfully
+- **PARTIAL** — Some items failed, but job completed
+- **FAILED** — Systemic error (job could not run)
+- **SKIPPED** — Lock was held, job did not execute (overlap prevention)
+
+**Observability:**
+- Currently running jobs visible
+- Last successful run per job type
+- Overlap attempts (SKIPPED) recorded
+- Error summaries for failed/partial runs
+
+**Operational queries:** Use `job_runs` table directly for detailed analysis:
+```sql
+SELECT * FROM job_runs WHERE status = 'RUNNING' ORDER BY started_at DESC;
+SELECT * FROM job_runs WHERE job_name = 'ingest' AND status = 'SUCCEEDED' ORDER BY finished_at DESC LIMIT 1;
+SELECT * FROM job_runs WHERE status = 'SKIPPED' ORDER BY started_at DESC LIMIT 20;
+```
+
+---

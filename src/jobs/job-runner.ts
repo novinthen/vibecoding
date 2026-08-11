@@ -57,7 +57,7 @@ export async function runJob(
         durationMs: 0,
         attempted: 0,
         succeeded: 0,
-        skipped: 0,
+        skipped: 1, // The job itself was skipped
         failed: 0,
         retryableFailures: 0,
         errorSummary: `Job '${jobName}' is already running. Skipped to prevent overlap.`,
@@ -74,7 +74,7 @@ export async function runJob(
           durationMs: 0,
           attempted: 0,
           succeeded: 0,
-          skipped: 0,
+          skipped: 1, // The job itself was skipped
           failed: 0,
           retryableFailures: 0,
           errorSummary: `Job '${jobName}' is already running. Skipped to prevent overlap.`,

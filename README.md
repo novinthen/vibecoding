@@ -18,7 +18,23 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 8 — Ranking, Trending & Editorial Prioritisation.**
+**Stage 9A — Production Automation & Scheduling.**
+
+The platform now has bounded, safe, repeatable job automation for the full intelligence pipeline (ingestion → enrichment → clustering → ranking). Jobs run automatically without manual intervention while preserving editorial control and observability.
+
+**Key capabilities:**
+- **Session-correct advisory locks** — PostgreSQL-native overlap prevention using dedicated PoolClient
+- **Bounded execution** — all jobs have finite default batch limits (ingestion: 50, enrichment: 100, clustering: 50, ranking: 100)
+- **Stage lock isolation** — standalone jobs cannot overlap pipeline stages (dependency ordering preserved)
+- **Observability** — all runs persisted to `job_runs` table, admin UI at `/admin/jobs`
+- **CLI interface** — `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`
+- **External scheduler ready** — cron/Vercel Cron/GitHub Actions can trigger jobs via CLI
+
+See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+---
+
+### Previously: Stage 8 — Ranking, Trending & Editorial Prioritisation
 
 On top of the Stage 3 ingestion engine, Stage 4 admin, Stage 5 public portal,
 Stage 5B localisation, Stage 6 AI intelligence, and Stage 7 Story clustering,
