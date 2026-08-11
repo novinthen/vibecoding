@@ -120,7 +120,7 @@ export class RankingEngine {
       rankingMethod: string;
       rankingVersion: string;
       calculatedScore: number;
-      signals: Record<string, unknown>;
+      signals: RankingSignals;
       calculatedAt: Date;
       timeHorizon: string | null;
       explanation: string | null;
