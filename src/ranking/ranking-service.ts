@@ -152,7 +152,7 @@ export function calculateSourceDiversityScore(
  */
 export function calculateSourceAuthorityScore(
   sources: Array<{ authorityTier: string }>,
-  config: RankingConfig,
+  _config: RankingConfig,
 ): number {
   if (sources.length === 0) return 0.0;
 

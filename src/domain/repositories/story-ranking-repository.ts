@@ -162,7 +162,7 @@ export class StoryRankingRepository {
     const storyIds = result.rows.map((r) => r.story_id);
     if (storyIds.length === 0) return [];
 
-    const ranked = await this.db.query<{ story_id: string }>(
+    await this.db.query<{ story_id: string }>(
       `SELECT DISTINCT ON (story_id) story_id
        FROM story_rankings
        WHERE story_id = ANY($1::uuid[])

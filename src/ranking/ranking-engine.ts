@@ -8,7 +8,7 @@ import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repo
 import { StoryRepository } from '@/domain/repositories/story-repository';
 
 import type { ArticleEnrichmentRow } from '@/domain/types';
-import type { RankingInput, StoryRankingRow } from '@/domain/ranking-types';
+import type { RankingInput, RankingSignals, StoryRankingRow } from '@/domain/ranking-types';
 
 import {
   calculateStoryRanking,
