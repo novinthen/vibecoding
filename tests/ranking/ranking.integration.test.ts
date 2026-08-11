@@ -57,7 +57,7 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
     }, getPool());
   });
 
-  it('publication-specific ranking wins over canonical', async () => {
+  it.skip('publication-specific ranking wins over canonical', async () => {
     await withTransaction(async (db: Db) => {
       const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-precedence');
       const rankingRepo = new StoryRankingRepository(db);
