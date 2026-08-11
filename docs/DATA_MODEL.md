@@ -4,6 +4,8 @@
 
 **Article and Story are different.**
 
+**Ranking and Clustering are separate.**
+
 ### Article
 One item published by one Source.
 
@@ -21,6 +23,9 @@ Example:
 > Anthropic launches a new Claude Code capability.
 
 The official announcement, independent coverage, and community reaction may all belong to the same Story.
+
+### Ranking
+A derived score that answers "Which Stories matter most right now?" Ranking operates on formed Stories and never alters their membership.
 
 Never collapse these concepts.
 
@@ -658,3 +663,34 @@ PUBLISH
 ```
 
 Each later processing step should be retryable and idempotent.
+
+---
+
+## Stage 8 Ranking (migration `0016`)
+
+### StoryRanking
+
+Records one ranking calculation for a Story. Append-only: re-ranking creates a new row, preserving history.
+
+Fields:
+- `id`, `story_id`, `publication_id` (NULL = canonical)
+- `ranking_method`, `ranking_version` (e.g., "weighted-sum", "ranking-score-v1")
+- `calculated_score` (final score before public display)
+- `signals` (JSONB: component scores for transparency)
+- `calculated_at`, `time_horizon`, `explanation`
+- `created_at`
+
+Indexes: `story_id`, `calculated_at DESC`, `calculated_score DESC`, `(publication_id, story_id, calculated_at DESC)`, `(publication_id, calculated_score DESC)`
+
+**Precedence:** Latest publication-specific ranking wins over canonical. A newer canonical ranking does NOT override an older publication-specific ranking.
+
+**Invariant:** Ranking never mutates Story membership or Article source facts.
+
+### PublicationStory additions
+
+- `suppress_ranking` (boolean, default false): Exclude from ranked lists without unpublishing. Story detail page remains accessible.
+
+Editorial controls (`featured`, `editorial_priority`, `suppress_ranking`) are applied during ranking calculation, not double-counted in SQL ordering.
+
+---
+

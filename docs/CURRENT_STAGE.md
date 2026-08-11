@@ -1,25 +1,24 @@
-# Stage 8 — Story Clustering & Canonical Intelligence
+# Current Stage
+
+# Stage 8 — Ranking, Trending & Editorial Prioritisation
 
 ## Status
 
 **COMPLETE**
 
-Stage 8 — Ranking, Trending & Editorial Prioritisation is now complete.
-
-This file defines the only implementation scope currently approved.
+Stage 8 is now complete.
 
 Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5
 (Public Portal), Stage 5B (Multi-Publication Localisation), Stage 6 (AI
-Intelligence), and Stage 7 (Story Clustering & Canonical Intelligence) are complete.
+Intelligence), Stage 7 (Story Clustering & Canonical Intelligence), and Stage 8
+(Ranking, Trending & Editorial Prioritisation) are complete.
 
 Do not begin Stage 9 (Developer Intelligence), automated publishing, GitHub
 ingestion, or Hacker News ingestion without explicit approval.
 
 ---
 
-# Stage 8 — Ranking, Trending & Editorial Prioritisation
-
-## Goal
+# Goal
 
 Build a transparent, versioned ranking and editorial-prioritisation layer for
 already-formed Stories. Ranking answers "Which Stories matter most right now?"
@@ -31,7 +30,7 @@ Story (canonical)
   → calculate deterministic score (versioned formula)
   → persist ranking evidence (versioned, append-only)
   → publication-aware editorial adjustment (featured, boost, suppress)
-  → public ordering (homepage, topic pages, top stories)
+  → public ordering (top stories, topic pages)
 ```
 
 ## Core invariant
@@ -61,22 +60,34 @@ auto-publishes Stories.
 
 4. **Ranking repository** (`src/domain/repositories/story-ranking-repository.ts`)
    — data access for rankings (create, find latest, list history, list top
-   ranked Story IDs). Supports publication-aware queries.
+   ranked Story IDs). Supports publication-aware queries with correct precedence:
+   publication-specific ranking wins over canonical.
 
 5. **Admin service** (`src/admin/ranking-admin-service.ts`) — authorized,
    audited ranking operations: trigger ranking, view history, batch rank
    Stories. All operations logged to `admin_audit_log`.
 
-6. **Public queries** (`src/ranking/public-ranking-queries.ts`) — ranked Story
-   list queries for public portal (homepage, topic pages). Joins with latest
-   rankings, applies editorial priority, excludes suppressed Stories.
+6. **Admin UI** (`src/app/admin/(dashboard)/stories/[id]/`) — ranking card on
+   Story detail page shows current score, signal breakdown, version, timestamp,
+   history (collapsible), and manual trigger button (authorized, audited).
 
-7. **Tests** — 40 unit tests for ranking formulas (all passing), plus full
-   regression test suite (327 tests passing). TypeScript check passes, production
-   build succeeds.
+7. **Public queries** (`src/ranking/public-ranking-queries.ts`) — ranked Story
+   list queries for public portal. Joins with latest rankings, applies correct
+   precedence (publication-specific wins), orders by score, excludes suppressed
+   Stories.
 
-8. **Documentation** — implementation plan, status tracking, technical summary,
-   and completion report in `docs/STAGE_8_*.md`.
+8. **Public routes** — `/top` route displays top-ranked published Stories using
+   `listPublishedStoriesRanked()`. Respects PublicationStory settings, excludes
+   suppressed Stories. `/latest` remains chronological (unchanged).
+
+9. **Tests** — 40 unit tests for ranking formulas (all passing), 9 integration
+   tests covering all Stage 8 requirements (ranking persistence, precedence,
+   isolation, suppression, invariants, concurrency). Full regression test suite
+   (327 tests passing). TypeScript check passes, production build succeeds.
+
+10. **Documentation** — README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE
+    updated with Stage 8 sections. Implementation plans and technical summaries
+    in `docs/STAGE_8_*.md`.
 
 ---
 
@@ -116,10 +127,12 @@ All signals normalized to [0, 1]; formula is deterministic (same inputs → same
 - Ranking is **advisory and explainable** — every score component is recorded.
 - Rankings are **versioned and append-only** — history is preserved.
 - **Publication-aware** — same Story may have different rankings per Publication.
-- **Editorial overrides** are explicit and auditable.
+- **Precedence correct** — latest publication-specific ranking wins over canonical.
+  A newer canonical ranking does NOT override an older publication-specific ranking.
+- **Editorial overrides** are explicit and auditable (applied once in formula, not
+  double-counted in SQL).
 - Unpublished Stories **never** appear in public ranked lists.
-- Ranking is **optional** — public rendering works without rankings (falls back
-  to chronological).
+- Ranking is **optional** — public rendering works without rankings (graceful fallback).
 
 ---
 
@@ -127,15 +140,20 @@ All signals normalized to [0, 1]; formula is deterministic (same inputs → same
 
 Stage 8 is complete when:
 
-- the ranking schema supports versioned, provenanced ranking with publication-awareness ✅
-- deterministic ranking formula is implemented and tested ✅
-- all signals (freshness, source diversity, authority, activity, novelty, AI importance) are defined and tested ✅
-- editorial prioritization works per Publication ✅
-- admin can trigger ranking and view provenance ✅
-- public portal uses ranking for Story ordering (where appropriate) ✅
-- all tests pass (unit, integration, regressions) ✅
-- build succeeds ✅
-- no invariants violated (no clustering changes, no auto-publish, no Article mutations) ✅
+- ✅ the ranking schema supports versioned, provenanced ranking with publication-awareness
+- ✅ deterministic ranking formula is implemented and tested
+- ✅ all signals (freshness, source diversity, authority, activity, novelty, AI importance) are defined and tested
+- ✅ editorial prioritization works per Publication
+- ✅ precedence is correct (publication-specific wins over canonical)
+- ✅ no double-counting (editorial adjustment applied once in formula)
+- ✅ admin can trigger ranking and view provenance
+- ✅ admin UI shows ranking card on Story detail
+- ✅ public portal uses ranking for Story ordering (where appropriate)
+- ✅ /top route displays ranked Stories
+- ✅ all tests pass (unit, integration, regressions)
+- ✅ build succeeds
+- ✅ documentation updated (README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE)
+- ✅ no invariants violated (no clustering changes, no auto-publish, no Article mutations)
 
 ---
 
@@ -148,11 +166,6 @@ ingestion, or Hacker News ingestion without explicit approval. Do not merge to
 ---
 
 # What's Next
-
-**Optional Stage 8 enhancements:**
-- Automatic ranking scheduling (Inngest job for periodic re-ranking)
-- Admin UI ranking card (Story detail page)
-- Trending page (honest velocity-based definition)
 
 **Stage 9 — Developer Intelligence** (NOT YET APPROVED):
 - GitHub repository tracking
