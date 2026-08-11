@@ -211,22 +211,25 @@ async function setupStory(
   const articleRepo = new ArticleRepository(db);
   const storyRepo = new StoryRepository(db);
 
+  // Use unique slug with timestamp to avoid collisions
+  const uniqueSlug = `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
   const source = await sourceRepo.create({
-    name: `Source ${slug}`,
-    slug: `source-${slug}`,
+    name: `Source ${uniqueSlug}`,
+    slug: `source-${uniqueSlug}`,
     sourceType: 'RSS',
     authorityTier: 'PRIMARY',
   });
 
   const article = await articleRepo.create({
     sourceId: source.id,
-    url: `https://example.com/${slug}`,
-    originalTitle: `Article ${slug}`,
+    url: `https://example.com/${uniqueSlug}`,
+    originalTitle: `Article ${uniqueSlug}`,
   });
 
   const story = await storyRepo.createClustered({
-    slug: `story-${slug}`,
-    canonicalTitle: `Story ${slug}`,
+    slug: `story-${uniqueSlug}`,
+    canonicalTitle: `Story ${uniqueSlug}`,
     primaryArticleId: article.id,
     lastActivityAt: new Date(),
   });
