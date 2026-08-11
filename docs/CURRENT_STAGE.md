@@ -56,10 +56,11 @@ same event, they are kept separate.
    never written into Article source fields; `ensureArticleEmbedding` reuses a
    stored vector when the model/version and source-content hash are unchanged.
 3. **Candidate generation** (`src/clustering/candidates.ts`) — bounded and
-   explainable: embedding nearest-neighbours (pgvector `<=>`, exact within a
-   window) plus shared-Entity Stories, each capped and time-windowed, unioned and
-   trimmed. Never an all-pairs comparison; each candidate records which signal
-   surfaced it.
+   explainable: embedding nearest-neighbours (pgvector `<=>`, exact) plus
+   shared-Entity Stories, each capped, unioned and trimmed. Both signals share a
+   **two-sided temporal window** (14d back, a bounded 2d future tolerance) so a
+   backfilled Article cannot match an arbitrarily newer Story. Never an all-pairs
+   comparison; each candidate records which signal surfaced it.
 4. **Similarity scoring** (`src/clustering/scoring.ts`) — a pure, deterministic,
    versioned multi-signal formula (`cluster-score-v1`): weighted embedding
    similarity, title-token overlap, shared entities, and temporal proximity, with
@@ -70,6 +71,9 @@ same event, they are kept separate.
    lock → append an auditable decision. Outcomes: CREATED_STORY, ASSIGNED_EXISTING,
    AMBIGUOUS (no merge), SKIPPED_EXISTING (idempotent re-run), SKIPPED_PROTECTED
    (REVIEWED/LOCKED Story). Idempotent and concurrency-safe.
+   A forced re-run of an already-clustered Article re-scores and records a
+   reviewable decision but never adds a second membership; deliberate reassignment
+   is the explicit admin Move workflow only.
 6. **Story lifecycle** — a newly formed Story is DRAFT + UNREVIEWED (internal/
    reviewable). Clustering never publishes; PublicationStory remains the explicit
    publishing boundary. `canonical_title` is a provisional, evidence-based value

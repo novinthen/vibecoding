@@ -238,16 +238,24 @@ auditable ClusteringDecision
   CI is offline and reproducible; a real provider is a drop-in. Embeddings are
   derived data, versioned/provenanced, and never written to Article source fields.
 - **Candidate generation** (`candidates.ts`): bounded and explainable — embedding
-  nearest-neighbours (exact pgvector `<=>` within a time window) plus shared-Entity
-  Stories, each capped, unioned, and trimmed. Never all-pairs.
+  nearest-neighbours (exact pgvector `<=>`) plus shared-Entity Stories, each capped,
+  unioned, and trimmed. Never all-pairs. Both signals share a **two-sided temporal
+  window** `activeSince ≤ story.last_activity_at ≤ activeUntil` around the Article's
+  reference time (14d back, a bounded 2d future tolerance), so a backfilled/older
+  Article can never match an arbitrarily newer Story; Stories with a null activity
+  timestamp are excluded (fail conservative).
 - **Scoring** (`scoring.ts`): a pure, deterministic, versioned formula
   (`cluster-score-v1`) combining embedding similarity, title overlap, shared
   entities, and temporal proximity, with a hard evidence gate, a conservative
   assign threshold, and an ambiguity margin. Never an opaque LLM decision.
 - **Assignment engine** (`assignment.ts`): applies the decision under a per-Article
   transaction-scoped advisory lock and re-checks membership inside it, so re-runs
-  are idempotent and concurrent runs are safe. It never mutates Article source
-  facts, never publishes, and never auto-modifies a REVIEWED/LOCKED Story.
+  are idempotent and concurrent runs are safe. Automatic or forced clustering
+  **never** adds a second Story membership to an Article that already belongs to
+  one — a forced re-run only re-scores and records a reviewable decision;
+  deliberate reassignment is the explicit admin Move workflow. It never mutates
+  Article source facts, never publishes, and never auto-modifies a REVIEWED/LOCKED
+  Story.
 - **Provenance** (`clustering_decisions`): every attempt — including AMBIGUOUS and
   skips — is appended as an auditable row with the scored candidate set.
 

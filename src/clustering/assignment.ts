@@ -70,7 +70,14 @@ export const CLUSTERING_LOCK_NAMESPACE = 0x636c75; // "clu"
 
 export interface ClusterArticleOptions {
   candidates?: CandidateOptions;
-  /** Re-cluster even if the Article already belongs to a Story. */
+  /**
+   * Re-score an already-clustered Article and record a fresh, reviewable
+   * clustering decision (with its scored candidate set). It does NOT reassign:
+   * clustering never adds a second Story membership to an Article that already
+   * belongs to one — deliberate reassignment is the explicit admin Move workflow
+   * (`moveArticleBetweenStories`). For an unclustered Article, `force` has no
+   * effect beyond skipping the cheap already-clustered short-circuit.
+   */
   force?: boolean;
   /** Bypass the eligibility gate (explicit admin override). */
   bypassEligibility?: boolean;
@@ -197,6 +204,8 @@ export async function clusterArticle(
     embeddingModel: provider.model,
     embeddingVersion: provider.version,
   };
+  const candidateRecords = ranked.map(toCandidateRecord);
+  const topScore = ranked[0]?.score ?? null;
 
   // Apply the decision under a per-Article advisory lock.
   return withTransaction(async (tx) => {
@@ -208,10 +217,19 @@ export async function clusterArticle(
     const stories = new StoryRepository(tx);
     const decisions = new ClusteringDecisionRepository(tx);
 
-    // Authoritative idempotency re-check inside the lock: a concurrent run may
-    // have clustered this Article while we scored candidates.
+    // Authoritative membership re-check inside the lock. This is BOTH the
+    // idempotency guard for a normal re-run AND the invariant that automatic or
+    // forced clustering NEVER creates an additional Story membership: if the
+    // Article already belongs to a Story, we record a decision but never attach
+    // it to another. A concurrent run that clustered it first lands here too.
+    // Deliberate reassignment is the explicit admin Move workflow only.
     const currentStoryIds = await stories.listStoryIdsForArticle(articleId);
-    if (currentStoryIds.length > 0 && !options.force) {
+    if (currentStoryIds.length > 0) {
+      const reason = options.force
+        ? 'Article already belongs to a Story; forced re-run recorded the scored ' +
+          'candidates for review but did not reassign. Use Move to reassign — ' +
+          'clustering never creates a second membership.'
+        : 'Article is already clustered; no change on re-run.';
       return finalize(
         tx,
         decisions,
@@ -220,8 +238,11 @@ export async function clusterArticle(
           storyId: currentStoryIds[0] ?? null,
           decision: 'SKIPPED_EXISTING',
           decisionSource,
-          reason: 'Article is already clustered; no change on re-run.',
-          candidates: [],
+          topScore,
+          candidateCount: ranked.length,
+          reason,
+          // On a forced re-run `ranked` is populated (for review); otherwise [].
+          candidates: candidateRecords,
           ...embeddingProvenance,
         },
         null,
@@ -230,8 +251,6 @@ export async function clusterArticle(
     }
 
     const selection = selectAssignment(ranked);
-    const candidateRecords = ranked.map(toCandidateRecord);
-    const topScore = ranked[0]?.score ?? null;
 
     if (
       selection.outcome === 'AMBIGUOUS' &&

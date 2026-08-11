@@ -170,4 +170,65 @@ describe.skipIf(!hasDb)('embedding persistence & NN (integration)', () => {
       await cleanup(query.article.id, query.sourceId);
     }
   });
+
+  it('applies a two-sided temporal window (past window + bounded future tolerance)', async () => {
+    const pool = getPool();
+    const seed = await seedArticle(
+      'Temporal window shared representative text',
+    );
+    const emb = await ensureArticleEmbedding(pool, provider, seed.article);
+    const storyRepo = new StoryRepository(pool);
+    const storyEmb = new StoryEmbeddingRepository(pool);
+
+    // Reference "now" for the query window.
+    const activeSince = '2026-04-17T00:00:00.000Z'; // ref - 14d
+    const activeUntil = '2026-05-03T00:00:00.000Z'; // ref + 2d tolerance
+
+    // Four Stories with the SAME representative embedding but different activity.
+    const cases: Record<string, string> = {
+      pastIn: '2026-04-28T00:00:00.000Z', // inside past window
+      futureIn: '2026-05-02T00:00:00.000Z', // inside future tolerance
+      pastFar: '2026-03-01T00:00:00.000Z', // far before window
+      futureFar: '2026-05-20T00:00:00.000Z', // far after window
+    };
+    const ids: Record<string, string> = {};
+    try {
+      for (const [label, activity] of Object.entries(cases)) {
+        const story = await storyRepo.createClustered({
+          slug: `win-${crypto.randomUUID()}`,
+          canonicalTitle: seed.article.original_title,
+          primaryArticleId: seed.article.id,
+          lastActivityAt: activity,
+        });
+        ids[label] = story.id;
+        await storyEmb.upsert(story.id, {
+          provider: provider.name,
+          model: provider.model,
+          version: provider.version,
+          dimensions: provider.dimensions,
+          embedding: emb.vector,
+          sourceContentHash: 'x',
+        });
+      }
+
+      const hits = await storyEmb.nearestStories({
+        embedding: emb.vector,
+        model: provider.model,
+        limit: 50,
+        activeSince,
+        activeUntil,
+      });
+      const hitIds = new Set(hits.map((h) => h.story_id));
+
+      expect(hitIds.has(ids.pastIn!)).toBe(true); // inside past window
+      expect(hitIds.has(ids.futureIn!)).toBe(true); // inside future tolerance
+      expect(hitIds.has(ids.pastFar!)).toBe(false); // far before — excluded
+      expect(hitIds.has(ids.futureFar!)).toBe(false); // far after — excluded
+    } finally {
+      for (const id of Object.values(ids)) {
+        await pool.query('DELETE FROM stories WHERE id = $1', [id]);
+      }
+      await cleanup(seed.article.id, seed.sourceId);
+    }
+  });
 });

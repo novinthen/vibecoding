@@ -22,8 +22,16 @@ import { tokenSet } from './tokens';
  */
 
 export interface CandidateOptions {
-  /** How far back a Story's activity may be to still be a candidate. */
+  /** How far BEFORE the Article's reference time a Story's activity may be. */
   timeWindowHours?: number;
+  /**
+   * How far AFTER the Article's reference time a Story's activity may be. Bounds
+   * future leakage: a backfilled/older Article must not consider Stories whose
+   * activity is arbitrarily far in the future. Kept small — new same-event
+   * coverage of a just-published Article arrives within a day or two, and a
+   * Story's `last_activity_at` only advances as members are added.
+   */
+  futureToleranceHours?: number;
   /** Max embedding nearest-neighbour candidates. */
   maxEmbeddingCandidates?: number;
   /** Max shared-entity candidates. */
@@ -33,8 +41,11 @@ export interface CandidateOptions {
 }
 
 export const DEFAULT_CANDIDATE_OPTIONS: Required<CandidateOptions> = {
-  // Two weeks: same-event coverage clusters within days, not months.
+  // Two weeks back: same-event coverage clusters within days, not months.
   timeWindowHours: 24 * 14,
+  // Two days forward: a small, explicit tolerance for coverage that trickles in
+  // just after an Article — never an open-ended future.
+  futureToleranceHours: 24 * 2,
   maxEmbeddingCandidates: 20,
   maxEntityCandidates: 20,
   maxCandidates: 25,
@@ -81,8 +92,16 @@ export async function generateCandidates(
 ): Promise<CandidateFeatures[]> {
   const options = { ...DEFAULT_CANDIDATE_OPTIONS, ...params.options };
   const { db, article, embedding, model, articleEntityIds } = params;
+  // Two-sided temporal window around the Article's reference time:
+  //   activeSince <= story.last_activity_at <= activeUntil
+  // The upper bound prevents an older/backfilled Article from clustering into a
+  // much newer Story on title/embedding similarity alone (false-merge guard).
+  const reference = referenceDate(article).getTime();
   const activeSince = new Date(
-    referenceDate(article).getTime() - options.timeWindowHours * 3600 * 1000,
+    reference - options.timeWindowHours * 3600 * 1000,
+  );
+  const activeUntil = new Date(
+    reference + options.futureToleranceHours * 3600 * 1000,
   );
 
   // Track which signal(s) surfaced each candidate Story, preserving discovery
@@ -105,6 +124,7 @@ export async function generateCandidates(
     model,
     limit: options.maxEmbeddingCandidates,
     activeSince,
+    activeUntil,
     excludeStoryIds: params.excludeStoryIds,
   });
   for (const neighbour of neighbours) note(neighbour.story_id, 'embedding');
@@ -115,6 +135,7 @@ export async function generateCandidates(
       db,
       [...articleEntityIds],
       activeSince,
+      activeUntil,
       params.excludeStoryIds,
       options.maxEntityCandidates,
     );
@@ -127,11 +148,17 @@ export async function generateCandidates(
   return loadCandidateFeatures(db, candidateIds, model, sourcesByStory);
 }
 
-/** Stories linked to any of the given Entities, within the window and eligible. */
+/**
+ * Stories linked to any of the given Entities, within the two-sided time window
+ * and eligible. Stories with a null `last_activity_at` are excluded (fail
+ * conservative) — every clustered Story has a non-null activity timestamp, so a
+ * null here is anomalous and must not leak past the temporal bound.
+ */
 async function sharedEntityStories(
   db: Db,
   entityIds: string[],
   activeSince: Date,
+  activeUntil: Date,
   excludeStoryIds: string[],
   limit: number,
 ): Promise<string[]> {
@@ -141,10 +168,17 @@ async function sharedEntityStories(
      JOIN stories s ON s.id = se.story_id
      WHERE se.entity_id = ANY($1::uuid[])
        AND s.status IN ('DRAFT', 'ACTIVE')
-       AND (s.last_activity_at IS NULL OR s.last_activity_at >= $2)
-       AND se.story_id <> ALL($3::uuid[])
-     LIMIT $4`,
-    [entityIds, activeSince.toISOString(), excludeStoryIds, clamp(limit)],
+       AND s.last_activity_at >= $2
+       AND s.last_activity_at <= $3
+       AND se.story_id <> ALL($4::uuid[])
+     LIMIT $5`,
+    [
+      entityIds,
+      activeSince.toISOString(),
+      activeUntil.toISOString(),
+      excludeStoryIds,
+      clamp(limit),
+    ],
   );
   return result.rows.map((row) => row.story_id);
 }

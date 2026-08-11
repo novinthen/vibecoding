@@ -97,6 +97,14 @@ async function seedStory(
   return { storyId: story.id, article };
 }
 
+async function storyIdsFor(articleId: string): Promise<string[]> {
+  const r = await getPool().query<{ story_id: string }>(
+    'SELECT story_id FROM story_articles WHERE article_id = $1 ORDER BY story_id',
+    [articleId],
+  );
+  return r.rows.map((row) => row.story_id);
+}
+
 async function memberCount(db: Db, storyId: string): Promise<number> {
   const r = await db.query<{ n: string }>(
     'SELECT count(*)::text AS n FROM story_articles WHERE story_id = $1',
@@ -194,15 +202,50 @@ describe.skipIf(!hasDb)('clusterArticle (integration)', () => {
     expect(await memberCount(getPool(), storyId)).toBe(1);
   });
 
-  it('never links the same Article to the same Story twice (force re-attach is a no-op)', async () => {
+  it('never links the same Article to the same Story twice (force re-run is a no-op)', async () => {
     const t = tag();
     const title = `Repeat ${t} anthropic claude code duplicate guard delta`;
     const seed = await seedStory(title);
     const article = await seedArticle(`${title} extended`);
     await clusterArticle(article.id, {}, deps); // ASSIGNED_EXISTING
-    // Force a re-run: candidate scoring runs again but the PK prevents a dup row.
-    await clusterArticle(article.id, { force: true }, deps);
+    // Force a re-run: it records a fresh decision but never reassigns/duplicates.
+    const forced = await clusterArticle(article.id, { force: true }, deps);
+    expect(forced.decision.decision).toBe('SKIPPED_EXISTING');
     expect(await memberCount(getPool(), seed.storyId)).toBe(2);
+  });
+
+  it('forced re-run never creates a second Story membership, even if another Story scores higher', async () => {
+    const t = tag();
+    const title = `Multi ${t} anthropic claude code single membership omega`;
+    // Story A (seed) and an independent Story B with IDENTICAL representative text.
+    const storyA = await seedStory(title);
+    const storyB = await seedStory(title);
+    // Cluster a fresh Article into A (A is the only candidate at that moment
+    // because B is created before it; both match, but we attach to whichever the
+    // engine picks — pin it to A by clustering while only A exists).
+    const article = await seedArticle(`${title} coverage`);
+
+    // Manually attach to A so the Article definitively belongs to A first.
+    const stories = new StoryRepository(getPool());
+    await stories.attachArticle(storyA.storyId, article.id, {
+      relationshipType: 'RELATED',
+    });
+    expect(await storyIdsFor(article.id)).toEqual([storyA.storyId]);
+
+    // Force re-cluster. B (identical text) would score above threshold, but the
+    // engine must NOT create a second membership — it records a decision only.
+    const forced = await clusterArticle(article.id, { force: true }, deps);
+    expect(forced.decision.decision).toBe('SKIPPED_EXISTING');
+    expect(forced.story).toBeNull();
+
+    // The Article still belongs to exactly A; B never gained it.
+    expect(await storyIdsFor(article.id)).toEqual([storyA.storyId]);
+    expect(await memberCount(getPool(), storyB.storyId)).toBe(1);
+    // Forced re-run recorded the scored candidates for review (B considered).
+    expect(forced.decision.candidate_count).toBeGreaterThanOrEqual(1);
+    expect(
+      forced.decision.candidates.some((c) => c.storyId === storyB.storyId),
+    ).toBe(true);
   });
 
   it('handles concurrent clustering of one Article without duplicate Stories', async () => {
@@ -250,6 +293,26 @@ describe.skipIf(!hasDb)('clusterArticle (integration)', () => {
     // Neither Story gained a member.
     expect(await memberCount(getPool(), s1.storyId)).toBe(1);
     expect(await memberCount(getPool(), s2.storyId)).toBe(1);
+  });
+
+  it('does not let a backfilled older Article cluster into a much-newer Story', async () => {
+    const t = tag();
+    const title = `Backfill ${t} anthropic claude code temporal window sigma`;
+    // A Story whose activity is ~5 months in the FUTURE relative to the Article.
+    const future = await seedStory(title, {
+      publishedAt: '2026-09-01T00:00:00.000Z',
+    });
+    // A backfilled Article with identical text but published long before.
+    const old = await seedArticle(title, {
+      publishedAt: '2026-04-01T00:00:00.000Z',
+    });
+
+    const result = await clusterArticle(old.id, {}, deps);
+    // The newer Story is outside the two-sided window, so despite identical
+    // text/embedding the Article forms its own Story (false split > false merge).
+    expect(result.decision.decision).toBe('CREATED_STORY');
+    expect(result.story?.id).not.toBe(future.storyId);
+    expect(await memberCount(getPool(), future.storyId)).toBe(1);
   });
 
   it('never auto-modifies a REVIEWED Story (protection)', async () => {

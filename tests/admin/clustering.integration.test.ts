@@ -198,6 +198,12 @@ describe.skipIf(!hasDb)('admin clustering service (integration)', () => {
     );
     expect(toView?.members.some((m) => m.article.id === mover.id)).toBe(true);
     expect(await auditCount(getPool(), 'STORY_ARTICLE_MOVE', to.id)).toBe(1);
+    // After Move the Article has EXACTLY the intended single membership.
+    const memberships = await getPool().query<{ story_id: string }>(
+      'SELECT story_id FROM story_articles WHERE article_id = $1',
+      [mover.id],
+    );
+    expect(memberships.rows.map((r) => r.story_id)).toEqual([to.id]);
   });
 
   it('sets a Story review state and records before/after audit', async () => {

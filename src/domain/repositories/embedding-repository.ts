@@ -135,18 +135,21 @@ export class StoryEmbeddingRepository {
 
   /**
    * Exact nearest-neighbour Stories for a query embedding, scoped to one model
-   * (so all vectors share dimensions) and bounded by `limit`. Optionally
-   * restricted to Stories active on/after `activeSince`, which — together with
-   * the limit — keeps candidate generation bounded rather than comparing against
-   * every Story. Exact `<=>` (cosine distance) is used deliberately: with a
-   * bounded candidate window it is fully deterministic and needs no
-   * dimension-fixed ANN index. Only Stories eligible for clustering are returned.
+   * (so all vectors share dimensions) and bounded by `limit`. Restricted to a
+   * two-sided temporal window `activeSince <= last_activity_at <= activeUntil`,
+   * which — together with the limit — keeps candidate generation bounded and
+   * prevents a backfilled/older Article from matching an arbitrarily newer Story.
+   * Stories with a null `last_activity_at` are excluded (fail conservative).
+   * Exact `<=>` (cosine distance) is used deliberately: with a bounded candidate
+   * window it is fully deterministic and needs no dimension-fixed ANN index. Only
+   * Stories eligible for clustering are returned.
    */
   async nearestStories(params: {
     embedding: number[];
     model: string;
     limit: number;
     activeSince?: Date | string | null;
+    activeUntil?: Date | string | null;
     excludeStoryIds?: string[];
   }): Promise<StoryNeighbour[]> {
     const values: unknown[] = [toVectorLiteral(params.embedding), params.model];
@@ -158,10 +161,15 @@ export class StoryEmbeddingRepository {
           ? params.activeSince.toISOString()
           : params.activeSince,
       );
-      // Include Stories with no activity timestamp yet (freshly formed).
-      clauses.push(
-        `(s.last_activity_at IS NULL OR s.last_activity_at >= $${values.length})`,
+      clauses.push(`s.last_activity_at >= $${values.length}`);
+    }
+    if (params.activeUntil) {
+      values.push(
+        params.activeUntil instanceof Date
+          ? params.activeUntil.toISOString()
+          : params.activeUntil,
       );
+      clauses.push(`s.last_activity_at <= $${values.length}`);
     }
     if (params.excludeStoryIds && params.excludeStoryIds.length > 0) {
       values.push(params.excludeStoryIds);
