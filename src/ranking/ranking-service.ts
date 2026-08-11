@@ -213,7 +213,7 @@ export function calculateAiImportanceScore(
     importanceScore: number | null;
     status: string;
   }>,
-  config: RankingConfig,
+  _config: RankingConfig,
 ): number | null {
   const successfulScores = enrichments
     .filter((e) => e.status === 'SUCCEEDED' && e.importanceScore !== null)
