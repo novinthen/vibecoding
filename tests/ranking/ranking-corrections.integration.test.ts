@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { closePool, getPool, withTransaction, type Db } from '@/db/client';
+import { closePool, getPool, type Db } from '@/db/client';
 import { migrate } from '@/db/migrate';
 
 import { ArticleRepository } from '@/domain/repositories/article-repository';
@@ -19,17 +19,8 @@ import type { AdminSession } from '@/admin/auth/session';
 
 /**
  * Stage 8 ranking integration tests (real Postgres, DATABASE_URL-gated).
- * Each test runs inside a transaction that is always rolled back.
- *
- * Tests verify:
- * - Ranking precedence (publication-specific wins over canonical)
- * - Authorization (VIEWER rejected, ADMIN/EDITOR accepted)
- * - Audit + ranking persistence atomicity
- * - Public query ordering
- * - Suppression
- * - Unpublished exclusion
- * - Invariants (no Story/Article mutations)
- * - Publication isolation
+ * Tests do NOT use withTransaction to avoid rollback issues with ranking service.
+ * Cleanup is done explicitly in finally blocks.
  */
 const hasDb = Boolean(process.env.DATABASE_URL);
 
@@ -61,135 +52,153 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
   });
 
   it('publication-specific ranking beats newer canonical in public query', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, pubAId } = await setupTwoPublications(db, 'pub-precedence-public');
+    const db = getPool();
+    const { storyId, pubAId } = await setupTwoPublications(db, 'pub-precedence-public');
+
+    try {
       const engine = new RankingEngine(db);
 
-      // Create publication-specific ranking first
       await attachStoryToPublication(db, storyId, pubAId, false, 5);
       const pubRanking = await engine.rankStory(storyId, pubAId, true);
       await publishStory(db, storyId, pubAId);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Create newer canonical ranking
       await engine.rankStory(storyId, null, true);
 
-      // Public query should use older publication-specific ranking
       const stories = await listPublishedStoriesRanked(db, pubAId, 10);
       const story = stories.find((s) => s.id === storyId);
 
       expect(story).toBeDefined();
       expect(story!.ranking_score).toBe(pubRanking.calculated_score);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId, pubAId);
+    }
   });
 
   it('canonical ranking used when publication-specific does not exist', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, pubAId } = await setupTwoPublications(db, 'canonical-fallback');
+    const db = getPool();
+    const { storyId, pubAId } = await setupTwoPublications(db, 'canonical-fallback');
+
+    try {
       const engine = new RankingEngine(db);
 
-      // Create only canonical ranking
       const canonicalRanking = await engine.rankStory(storyId, null, true);
       await attachStoryToPublication(db, storyId, pubAId, false, 0);
       await publishStory(db, storyId, pubAId);
 
-      // Public query should use canonical ranking
       const stories = await listPublishedStoriesRanked(db, pubAId, 10);
       const story = stories.find((s) => s.id === storyId);
 
       expect(story).toBeDefined();
       expect(story!.ranking_score).toBe(canonicalRanking.calculated_score);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId, pubAId);
+    }
   });
 
   it('publication B never receives publication A ranking', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-isolation');
+    const db = getPool();
+    const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-isolation');
+
+    try {
       const engine = new RankingEngine(db);
 
-      // Attach story to both publications
       await attachStoryToPublication(db, storyId, pubAId, false, 0);
       await attachStoryToPublication(db, storyId, pubBId, false, 0);
 
-      // Create publication A ranking only
-      const pubARanking = await engine.rankStory(storyId, pubAId, true);
+      await engine.rankStory(storyId, pubAId, true);
       await publishStory(db, storyId, pubAId);
       await publishStory(db, storyId, pubBId);
 
-      // Publication B should NOT see Publication A's ranking
       const storiesB = await listPublishedStoriesRanked(db, pubBId, 10);
       const storyB = storiesB.find((s) => s.id === storyId);
 
       expect(storyB).toBeDefined();
-      expect(storyB!.ranking_score).toBeNull(); // No ranking for pub B
-    }, getPool());
+      expect(storyB!.ranking_score).toBeNull();
+    } finally {
+      await cleanupTest(db, storyId, pubAId, pubBId);
+    }
   });
 
   it('VIEWER direct service call rejected', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId } = await setupStory(db, 'viewer-reject');
+    const db = getPool();
+    const { storyId } = await setupStory(db, 'viewer-reject');
+
+    try {
       const service = new AdminRankingService(db);
 
       await expect(
         service.triggerRanking(VIEWER, storyId, null, true),
       ).rejects.toThrow('VIEWER role cannot trigger ranking');
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId);
+    }
   });
 
   it('ADMIN service call accepted', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId } = await setupStory(db, 'admin-accept');
+    const db = getPool();
+    const { storyId } = await setupStory(db, 'admin-accept');
+
+    try {
       const service = new AdminRankingService(db);
 
       const ranking = await service.triggerRanking(ADMIN, storyId, null, true);
       expect(ranking).toBeDefined();
       expect(ranking.story_id).toBe(storyId);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId);
+    }
   });
 
   it('suppression excludes from /top ordering', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, pubAId } = await setupTwoPublications(db, 'suppress-top');
+    const db = getPool();
+    const { storyId, pubAId } = await setupTwoPublications(db, 'suppress-top');
+
+    try {
       const engine = new RankingEngine(db);
 
       await attachStoryToPublication(db, storyId, pubAId, false, 0);
       await engine.rankStory(storyId, pubAId, true);
       await publishStory(db, storyId, pubAId);
 
-      // Story appears before suppression
       let stories = await listPublishedStoriesRanked(db, pubAId, 10);
       expect(stories.some((s) => s.id === storyId)).toBe(true);
 
-      // Suppress the story
       await suppressStory(db, storyId, pubAId);
 
-      // Story excluded after suppression
       stories = await listPublishedStoriesRanked(db, pubAId, 10);
       expect(stories.some((s) => s.id === storyId)).toBe(false);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId, pubAId);
+    }
   });
 
   it('unpublished story never appears in /top', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, pubAId } = await setupTwoPublications(db, 'unpublished-exclude');
+    const db = getPool();
+    const { storyId, pubAId } = await setupTwoPublications(db, 'unpublished-exclude');
+
+    try {
       const engine = new RankingEngine(db);
 
       await attachStoryToPublication(db, storyId, pubAId, false, 0);
       await engine.rankStory(storyId, pubAId, true);
-      // Do NOT publish
 
       const stories = await listPublishedStoriesRanked(db, pubAId, 10);
       expect(stories.some((s) => s.id === storyId)).toBe(false);
 
       const count = await countPublishedStoriesRanked(db, pubAId);
       expect(count).toBe(0);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId, pubAId);
+    }
   });
 
   it('ranking does not mutate StoryArticles', async () => {
-    await withTransaction(async (db: Db) => {
-      const { storyId, articleId } = await setupStory(db, 'no-mutation-sa');
+    const db = getPool();
+    const { storyId, articleId } = await setupStory(db, 'no-mutation-sa');
+
+    try {
       const storyRepo = new StoryRepository(db);
       const engine = new RankingEngine(db);
 
@@ -200,12 +209,16 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
 
       const membersAfter = await storyRepo.listArticleIds(storyId);
       expect(membersAfter).toEqual(membersBefore);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId);
+    }
   });
 
   it('ranking does not mutate Article source facts', async () => {
-    await withTransaction(async (db: Db) => {
-      const { articleId, storyId } = await setupStory(db, 'no-mutation-article');
+    const db = getPool();
+    const { articleId, storyId } = await setupStory(db, 'no-mutation-article');
+
+    try {
       const articleRepo = new ArticleRepository(db);
       const engine = new RankingEngine(db);
 
@@ -218,39 +231,46 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
       const articleAfter = await articleRepo.findById(articleId);
       expect(articleAfter!.original_title).toBe(titleBefore);
       expect(articleAfter!.url).toBe(urlBefore);
-    }, getPool());
+    } finally {
+      await cleanupTest(db, storyId);
+    }
   });
 
   it('/top ordering follows persisted final score (featured tier first)', async () => {
-    await withTransaction(async (db: Db) => {
-      const { pubAId } = await setupTwoPublications(db, 'top-ordering');
+    const db = getPool();
+    const { pubAId } = await setupTwoPublications(db, 'top-ordering');
+
+    const story1 = await setupStory(db, 'story1');
+    const story2 = await setupStory(db, 'story2');
+    const story3 = await setupStory(db, 'story3');
+
+    try {
       const engine = new RankingEngine(db);
 
-      // Create three stories with different scores
-      const story1 = await setupStory(db, 'story1');
-      await attachStoryToPublication(db, story1.storyId, pubAId, false, 10); // High priority
+      await attachStoryToPublication(db, story1.storyId, pubAId, false, 10);
       await engine.rankStory(story1.storyId, pubAId, true);
       await publishStory(db, story1.storyId, pubAId);
 
-      const story2 = await setupStory(db, 'story2');
-      await attachStoryToPublication(db, story2.storyId, pubAId, true, 0); // Featured
+      await attachStoryToPublication(db, story2.storyId, pubAId, true, 0);
       await engine.rankStory(story2.storyId, pubAId, true);
       await publishStory(db, story2.storyId, pubAId);
 
-      const story3 = await setupStory(db, 'story3');
-      await attachStoryToPublication(db, story3.storyId, pubAId, false, 0); // Normal
+      await attachStoryToPublication(db, story3.storyId, pubAId, false, 0);
       await engine.rankStory(story3.storyId, pubAId, true);
       await publishStory(db, story3.storyId, pubAId);
 
       const stories = await listPublishedStoriesRanked(db, pubAId, 10);
 
-      // Featured should be first
       expect(stories[0]!.featured).toBe(true);
       expect(stories[0]!.id).toBe(story2.storyId);
 
-      // Then ordered by score
-      expect(stories[1]!.id).toBe(story1.storyId); // Higher score due to priority
-    }, getPool());
+      expect(stories[1]!.id).toBe(story1.storyId);
+    } finally {
+      await cleanupTest(db, story1.storyId);
+      await cleanupTest(db, story2.storyId);
+      await cleanupTest(db, story3.storyId);
+      await cleanupTest(db, null, pubAId);
+    }
   });
 });
 
@@ -264,7 +284,6 @@ async function setupStory(
   const articleRepo = new ArticleRepository(db);
   const storyRepo = new StoryRepository(db);
 
-  // Use unique slug with timestamp to avoid collisions
   const uniqueSlug = `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   const source = await sourceRepo.create({
@@ -299,7 +318,6 @@ async function setupTwoPublications(
   const { storyId } = await setupStory(db, slug);
   const pubRepo = new PublicationRepository(db);
 
-  // Use unique slug with timestamp to avoid collisions
   const uniqueSlug = `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   const pubA = await pubRepo.create({
@@ -363,5 +381,30 @@ async function suppressStory(db: Db, storyId: string, publicationId: string): Pr
       editorialPriority: ps.editorial_priority,
       suppressRanking: true,
     });
+  }
+}
+
+async function cleanupTest(
+  db: Db,
+  storyId: string | null,
+  ...publicationIds: (string | null)[]
+): Promise<void> {
+  try {
+    if (storyId) {
+      await db.query('DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2', ['story', storyId]);
+      await db.query('DELETE FROM story_rankings WHERE story_id = $1', [storyId]);
+      await db.query('DELETE FROM publication_stories WHERE story_id = $1', [storyId]);
+      await db.query('DELETE FROM story_articles WHERE story_id = $1', [storyId]);
+      await db.query('DELETE FROM stories WHERE id = $1', [storyId]);
+      await db.query('DELETE FROM articles WHERE id IN (SELECT article_id FROM story_articles WHERE story_id = $1)', [storyId]);
+    }
+    for (const pubId of publicationIds) {
+      if (pubId) {
+        await db.query('DELETE FROM publications WHERE id = $1', [pubId]);
+      }
+    }
+  } catch (err) {
+    // Cleanup errors are non-fatal
+    console.error('Cleanup error:', err);
   }
 }
