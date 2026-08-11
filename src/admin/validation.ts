@@ -87,6 +87,45 @@ const optionalTopicId = z
   .optional()
   .or(z.literal('').transform(() => null));
 
+/**
+ * Raw source-type adapter configuration as submitted by the admin form: a JSON
+ * string (empty → undefined = no config). The JSON is parsed to an object here;
+ * the *shape* is then validated per source type by the source service via
+ * {@link import('@/ingestion/source-config').sourceConfigForStorage}, because the
+ * type selects which config schema applies. Bounded to a small size — adapter
+ * config is tiny.
+ */
+const optionalSourceConfigJson = z
+  .string()
+  .trim()
+  .max(4096)
+  .optional()
+  .transform((value, ctx) => {
+    if (!value || value === '' || value === '{}') return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Source config must be valid JSON.',
+      });
+      return z.NEVER;
+    }
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Source config must be a JSON object.',
+      });
+      return z.NEVER;
+    }
+    return parsed as Record<string, unknown>;
+  });
+
 export const createSourceSchema = z.object({
   name: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
@@ -97,6 +136,7 @@ export const createSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
+  sourceConfig: optionalSourceConfigJson,
 });
 export type CreateSourceValues = z.infer<typeof createSourceSchema>;
 
@@ -109,6 +149,7 @@ export const updateSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
+  sourceConfig: optionalSourceConfigJson,
 });
 export type UpdateSourceValues = z.infer<typeof updateSourceSchema>;
 

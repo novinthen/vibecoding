@@ -123,6 +123,11 @@ export default async function SourceDetailPage({
                   ? ''
                   : String(source.poll_interval),
               defaultTopicId: source.default_topic_id ?? '',
+              sourceConfig:
+                source.source_config &&
+                Object.keys(source.source_config).length > 0
+                  ? JSON.stringify(source.source_config, null, 2)
+                  : '',
             }}
             submitLabel="Save changes"
           />

@@ -4,10 +4,27 @@ import type { SourceType } from '@/domain/enums';
 
 const emptyConfig = z.object({}).strict();
 
+/**
+ * A GitHub owner/repo path segment. The character class already forbids `/`
+ * (path traversal / injection into the fixed api.github.com path), but `.` and
+ * `..` survive `encodeURIComponent`, so they are rejected explicitly — the
+ * acquirer builds `/repos/{owner}/{repo}/releases` from these and must never be
+ * steered off that fixed path.
+ */
+const githubPathSegment = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9_.-]+$/)
+  .refine((value) => value !== '.' && value !== '..', {
+    message: 'Must not be "." or "..".',
+  });
+
 const githubConfig = z
   .object({
-    owner: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_.-]+$/),
-    repo: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_.-]+$/),
+    owner: githubPathSegment,
+    repo: githubPathSegment,
     prereleases: z.enum(['exclude', 'include', 'only']).default('exclude'),
     perPage: z.number().int().min(1).max(100).default(30),
     maxPages: z.number().int().min(1).max(5).default(1),

@@ -36,6 +36,7 @@ function sourceInputFromForm(formData: FormData) {
     language: formData.get('language') ?? '',
     pollInterval: formData.get('pollInterval') ?? '',
     defaultTopicId: formData.get('defaultTopicId') ?? '',
+    sourceConfig: formData.get('sourceConfig') ?? '',
   };
 }
 

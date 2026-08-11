@@ -36,6 +36,14 @@ export interface IngestErrorOptions {
   retryable: boolean;
   /** Upstream HTTP status, when the failure carries one. */
   httpStatus?: number | null;
+  /**
+   * A small, non-sensitive subset of upstream response headers (e.g. rate-limit
+   * counters, `retry-after`) captured so a source-specific acquirer can refine
+   * the classification — for example distinguishing a GitHub 403 caused by rate
+   * limiting from a genuine authorization failure. NEVER contains request
+   * headers, and in particular never an Authorization/token value.
+   */
+  responseHeaders?: Record<string, string>;
   /** Underlying cause, preserved for logs/debugging. */
   cause?: unknown;
 }
@@ -45,6 +53,7 @@ export class IngestError extends Error {
   readonly code: IngestErrorCode;
   readonly retryable: boolean;
   readonly httpStatus: number | null;
+  readonly responseHeaders: Record<string, string> | null;
 
   constructor(
     code: IngestErrorCode,
@@ -59,14 +68,20 @@ export class IngestError extends Error {
     this.code = code;
     this.retryable = options.retryable;
     this.httpStatus = options.httpStatus ?? null;
+    this.responseHeaders = options.responseHeaders ?? null;
   }
 }
 
 /**
  * Map an HTTP status to a classified {@link IngestError}. 429 and 5xx are
- * retryable; other 4xx are not.
+ * retryable; other 4xx are not. Optional non-sensitive response headers are
+ * attached so a caller can refine the classification (see
+ * {@link IngestErrorOptions.responseHeaders}).
  */
-export function ingestErrorFromHttpStatus(status: number): IngestError {
+export function ingestErrorFromHttpStatus(
+  status: number,
+  responseHeaders?: Record<string, string>,
+): IngestError {
   if (status === 429) {
     return new IngestError(
       'RATE_LIMITED',
@@ -74,6 +89,7 @@ export function ingestErrorFromHttpStatus(status: number): IngestError {
       {
         retryable: true,
         httpStatus: status,
+        responseHeaders,
       },
     );
   }
@@ -84,6 +100,7 @@ export function ingestErrorFromHttpStatus(status: number): IngestError {
       {
         retryable: true,
         httpStatus: status,
+        responseHeaders,
       },
     );
   }
@@ -93,6 +110,7 @@ export function ingestErrorFromHttpStatus(status: number): IngestError {
     {
       retryable: false,
       httpStatus: status,
+      responseHeaders,
     },
   );
 }

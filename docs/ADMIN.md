@@ -11,7 +11,14 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Sources** (`/admin/sources`): list, inspect, create, edit permitted fields,
   enable/disable, inspect health / consecutive failures / last success /
   conditional-fetch (ETag / Last-Modified) state, and **manually trigger
-  ingestion** for one Source through the existing Stage 3 engine.
+  ingestion** for one Source through the existing Stage 3 engine. A Source's
+  **Adapter config (JSON)** field (Stage 9B) holds per-type acquisition settings
+  — GitHub Releases require `{ "owner", "repo" }` (optional `prereleases`,
+  `perPage`, `maxPages`); Hacker News accepts `{ "mode": "top|best|new|ids" }`
+  (with `maxItems`, and `ids` when `mode` is `ids`); RSS/Atom leave it blank. The
+  config is validated for the Source's type on save. **Secrets are never stored
+  here** — a GitHub token is server-only environment configuration
+  (`GITHUB_TOKEN`), never persisted on the Source and never logged.
 - **Fetches** (`/admin/fetches`): recent `SourceFetch` attempts across all
   Sources with status filtering, HTTP/result info, counts, and error codes.
 - **Articles** (`/admin/articles`): search/filter by Source, status, and
@@ -162,6 +169,7 @@ runtime dependencies:
 | `ADMIN_SESSION_SECRET`  | Yes                | Cookie signing secret. ≥ 32 chars in production.   |
 | `ADMIN_USERS`           | Yes                | JSON roster of `{ username, passwordHash, role? }`.|
 | `DATABASE_URL`          | Yes                | The admin reads/writes Postgres.                   |
+| `GITHUB_TOKEN`          | No                 | Optional server-only token raising the GitHub API rate limit for Release ingestion (Stage 9B). Never exposed, stored in `source_config`, or logged. |
 
 Example `ADMIN_USERS` (never commit real values):
 

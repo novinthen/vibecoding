@@ -8,6 +8,11 @@ import {
 import { slugify } from '@/domain/slug';
 import type { SourceRow } from '@/domain/types';
 import { ingestSource, type IngestDeps, type IngestResult } from '@/ingestion';
+import { sourceConfigForStorage } from '@/ingestion/source-config';
+
+import { ZodError } from 'zod';
+
+import type { SourceType } from '@/domain/enums';
 
 import { assertCanMutate } from '../auth/guard';
 import type { AdminSession } from '../auth/session';
@@ -15,6 +20,33 @@ import { AdminValidationError, NotFoundError } from '../errors';
 import { createSourceSchema, updateSourceSchema } from '../validation';
 
 import { auditSourceView } from './audit-view';
+
+/**
+ * Validate the adapter config against the schema for this Source type and return
+ * the normalized object to store. `undefined` input yields the empty config
+ * (RSS/Atom carry none). A shape error is surfaced as a field-level validation
+ * error rather than an opaque 500.
+ */
+function validateSourceConfig(
+  sourceType: SourceType,
+  config: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  try {
+    return sourceConfigForStorage(sourceType, config ?? {});
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const first = error.issues[0];
+      const path = first?.path.join('.');
+      throw new AdminValidationError(
+        'sourceConfig',
+        `Invalid ${sourceType} config${path ? ` (${path})` : ''}: ${
+          first?.message ?? 'validation failed'
+        }`,
+      );
+    }
+    throw error;
+  }
+}
 
 /**
  * Source management service (Stage 4).
@@ -60,6 +92,7 @@ export async function createSource(
     language: values.language ?? null,
     pollInterval: values.pollInterval ?? null,
     defaultTopicId: values.defaultTopicId ?? null,
+    sourceConfig: validateSourceConfig(values.sourceType, values.sourceConfig),
   });
 
   await new AdminAuditLogRepository(db).record({
@@ -93,6 +126,12 @@ export async function updateSource(
     language: values.language ?? null,
     pollInterval: values.pollInterval ?? null,
     defaultTopicId: values.defaultTopicId ?? null,
+    // The source type is immutable, so the stored type governs which config
+    // schema applies. `undefined` (no field submitted) leaves config unchanged.
+    sourceConfig:
+      values.sourceConfig === undefined
+        ? undefined
+        : validateSourceConfig(before.source_type, values.sourceConfig),
   });
   if (!updated) throw new NotFoundError('Source not found.');
 

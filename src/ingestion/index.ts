@@ -29,9 +29,21 @@ export {
 } from './http/ssrf';
 export {
   fetchFeed,
+  type FeedFetcher,
   type FeedFetchOptions,
   type FeedResponse,
 } from './http/fetcher';
+
+export {
+  acquireForSource,
+  acquirerForSourceType,
+  feedAcquirer,
+  githubAcquirer,
+  hackerNewsAcquirer,
+  type AcquisitionContext,
+  type AcquisitionResult,
+  type SourceAcquirer,
+} from './acquire';
 
 export {
   canonicalizeUrl,
@@ -58,7 +70,6 @@ export {
   type ArticleWriter,
   type SourceFetchWriter,
   type SourceHealthWriter,
-  type FeedFetcher,
 } from './ingest';
 
 export { REPRESENTATIVE_SOURCES, type RegistrySource } from './registry';

@@ -91,6 +91,7 @@ Recommended fields:
 - enabled
 - language
 - default_topic_id where useful
+- source_config (JSONB; per-source-type acquisition settings, Stage 9B)
 - last_fetch_at
 - last_success_at
 - failure_count
@@ -109,6 +110,24 @@ Support at minimum:
 - RSSHUB
 - API
 - MANUAL
+
+## Source Config (Stage 9B)
+
+`sources.source_config` is a `NOT NULL DEFAULT '{}'::jsonb` object (migration
+`0018`) holding per-source-type acquisition settings. It is separate from the
+Article and holds no secrets — provider credentials are server-only environment
+configuration (e.g. `GITHUB_TOKEN`), never stored here.
+
+- **RSS / ATOM / RSSHUB / API / MANUAL** — empty object `{}`; acquisition uses
+  `feed_url`.
+- **GITHUB** — `{ owner, repo, prereleases: exclude|include|only, perPage (1–100),
+  maxPages (1–5) }`. `owner`/`repo` are validated path segments (no `/`, `.`, or
+  `..`), so the endpoint is always the fixed `api.github.com/repos/{owner}/{repo}/releases`.
+- **HACKER_NEWS** — `{ mode: top|best|new|ids, maxItems (1–200), ids: number[] }`
+  (`ids` required and only allowed when `mode = ids`).
+
+Each type's shape is validated by a Zod schema (`src/ingestion/source-config.ts`)
+before storage; the admin service rejects a mismatched config as a field error.
 
 ## Authority Tier
 

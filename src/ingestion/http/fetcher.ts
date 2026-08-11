@@ -40,11 +40,29 @@ export interface FeedFetchOptions {
   maxBytes?: number;
   /** User-Agent header sent with each request. */
   userAgent?: string;
+  /**
+   * Extra request headers merged (case-insensitively) over the defaults. Used by
+   * non-feed acquirers to set a JSON `Accept`, a provider API version, or an
+   * `Authorization` credential. An `authorization` header is automatically
+   * dropped before following a redirect to a different origin, so a provider
+   * token can never leak to a redirected host.
+   */
+  headers?: Record<string, string>;
   /** Injected fetch implementation (defaults to global fetch). */
   fetchImpl?: typeof fetch;
   /** Injected DNS resolver for the SSRF guard. */
   resolve?: HostResolver;
 }
+
+/**
+ * The fetch seam every acquirer depends on: given a URL and options, resolve a
+ * safe {@link FeedResponse}. Satisfied by {@link fetchFeed}; injected as a fake
+ * in tests so acquisition is deterministic without a network.
+ */
+export type FeedFetcher = (
+  url: string,
+  options: FeedFetchOptions,
+) => Promise<FeedResponse>;
 
 export interface FeedResponse {
   /** Final HTTP status of the terminal (non-redirect) response. */
@@ -100,6 +118,13 @@ export async function fetchFeed(
   };
   if (options.etag) headers['if-none-match'] = options.etag;
   if (options.lastModified) headers['if-modified-since'] = options.lastModified;
+  // Caller-supplied headers override defaults (case-insensitively), enabling a
+  // JSON Accept, a provider API version, or an Authorization credential.
+  if (options.headers) {
+    for (const [key, value] of Object.entries(options.headers)) {
+      headers[key.toLowerCase()] = value;
+    }
+  }
 
   // One controller + timer bounds the whole operation. The signal is passed to
   // every fetch hop, and `aborted` lets awaited steps that fetch cannot cancel
@@ -122,6 +147,10 @@ export async function fetchFeed(
 
   try {
     let currentUrl = rawUrl;
+    let initialOrigin: string | null = null;
+    // Once a redirect crosses an origin boundary, an Authorization credential is
+    // never sent again — a provider token must not reach a redirected host.
+    let stripAuthorization = false;
 
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
       // SSRF guard on every hop (initial + each redirect target). Raced against
@@ -130,6 +159,12 @@ export async function fetchFeed(
         assertPublicUrl(currentUrl, { resolve: options.resolve }),
         aborted,
       ]);
+      if (initialOrigin === null) initialOrigin = url.origin;
+
+      // A fresh per-hop header set (never a shared mutable object) so a stripped
+      // credential on a later hop cannot retroactively affect an earlier one.
+      const hopHeaders = { ...headers };
+      if (stripAuthorization) delete hopHeaders['authorization'];
 
       let response: Response;
       try {
@@ -137,7 +172,7 @@ export async function fetchFeed(
           method: 'GET',
           redirect: 'manual',
           signal,
-          headers,
+          headers: hopHeaders,
         });
       } catch (error) {
         throw toIngestError(error);
@@ -155,7 +190,13 @@ export async function fetchFeed(
         // Drain/close the redirect response body before the next hop.
         await response.body?.cancel().catch(() => {});
         // Resolve relative redirects against the current URL.
-        currentUrl = new URL(location, url).toString();
+        const nextUrl = new URL(location, url);
+        // Never carry an Authorization credential across an origin boundary — a
+        // redirect to a different host must not receive a provider token.
+        if (nextUrl.origin !== initialOrigin) {
+          stripAuthorization = true;
+        }
+        currentUrl = nextUrl.toString();
         continue;
       }
 
@@ -174,7 +215,10 @@ export async function fetchFeed(
 
       if (response.status >= 400) {
         await response.body?.cancel().catch(() => {});
-        throw ingestErrorFromHttpStatus(response.status);
+        throw ingestErrorFromHttpStatus(
+          response.status,
+          rateLimitHeaders(response.headers),
+        );
       }
 
       const body = await readCapped(response, maxBytes, aborted);
@@ -197,6 +241,29 @@ export async function fetchFeed(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Extract a small, non-sensitive subset of response headers used to classify
+ * rate limiting on an error response (e.g. GitHub's `x-ratelimit-*` counters and
+ * the standard `retry-after`). Deliberately allow-listed so no opaque or
+ * sensitive header is ever attached to a thrown error.
+ */
+function rateLimitHeaders(headers: Headers): Record<string, string> {
+  const allow = [
+    'retry-after',
+    'x-ratelimit-remaining',
+    'x-ratelimit-limit',
+    'x-ratelimit-reset',
+    'x-ratelimit-used',
+    'x-ratelimit-resource',
+  ];
+  const out: Record<string, string> = {};
+  for (const name of allow) {
+    const value = headers.get(name);
+    if (value !== null) out[name] = value;
+  }
+  return out;
 }
 
 /**

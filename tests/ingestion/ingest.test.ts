@@ -108,6 +108,7 @@ function makeSource(overrides: Partial<SourceRow> = {}): SourceRow {
     enabled: true,
     language: null,
     default_topic_id: null,
+    source_config: {},
     last_fetch_at: null,
     last_success_at: null,
     failure_count: 0,

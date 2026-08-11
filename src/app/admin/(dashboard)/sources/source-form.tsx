@@ -23,6 +23,7 @@ export interface SourceFormValues {
   language: string;
   pollInterval: string;
   defaultTopicId: string;
+  sourceConfig: string;
 }
 
 export interface TopicOption {
@@ -40,6 +41,7 @@ const EMPTY: SourceFormValues = {
   language: 'en',
   pollInterval: '',
   defaultTopicId: '',
+  sourceConfig: '',
 };
 
 /**
@@ -231,6 +233,30 @@ export function SourceForm({
           ))}
         </select>
         <FieldError message={fieldErrors.defaultTopicId} />
+      </div>
+
+      <div>
+        <label htmlFor="sourceConfig" className={labelClass}>
+          Adapter config (JSON)
+        </label>
+        <textarea
+          id="sourceConfig"
+          name="sourceConfig"
+          rows={4}
+          defaultValue={values.sourceConfig}
+          placeholder={
+            '{"owner":"vercel","repo":"next.js","prereleases":"exclude"} — GitHub\n' +
+            '{"mode":"top","maxItems":50} — Hacker News. Leave blank for RSS/Atom.'
+          }
+          className={`mt-1 font-mono text-sm ${inputClass}`}
+        />
+        <FieldError message={fieldErrors.sourceConfig} />
+        <p className="mt-1 text-xs text-gray-500">
+          Source-type-specific acquisition settings. GitHub Releases require{' '}
+          <code>owner</code>/<code>repo</code>; Hacker News accepts{' '}
+          <code>mode</code> (top/best/new/ids). Secrets (e.g. GitHub tokens) are
+          NEVER stored here — they are server-only environment configuration.
+        </p>
       </div>
 
       <button type="submit" disabled={pending} className={buttonClass}>

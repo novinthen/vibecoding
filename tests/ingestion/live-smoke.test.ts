@@ -15,8 +15,14 @@ import { REPRESENTATIVE_SOURCES } from '@/ingestion';
  */
 const live = process.env.INGEST_LIVE_SMOKE === '1';
 
+// This smoke test validates the RSS/Atom fetch-and-parse path specifically, so
+// it covers only feed-based Sources. GitHub Releases and Hacker News use their
+// own acquisition path (validated deterministically with fixtures) and carry no
+// feed URL, so they are intentionally excluded here.
+const FEED_SOURCES = REPRESENTATIVE_SOURCES.filter((s) => Boolean(s.feedUrl));
+
 describe.skipIf(!live)('live representative sources (smoke)', () => {
-  for (const source of REPRESENTATIVE_SOURCES) {
+  for (const source of FEED_SOURCES) {
     it(`fetches and parses ${source.slug}`, async () => {
       const feedUrl = source.feedUrl;
       expect(feedUrl, `${source.slug} needs a feed URL`).toBeTruthy();

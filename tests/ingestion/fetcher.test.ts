@@ -123,6 +123,63 @@ describe('fetchFeed — redirects', () => {
       }),
     ).rejects.toMatchObject({ code: 'SSRF_BLOCKED' });
   });
+
+  it('drops the Authorization header on a cross-origin redirect (token leak)', async () => {
+    const { fn, calls } = fakeFetch([
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://evil.example.net/steal' },
+      }),
+      new Response('{}', { status: 200 }),
+    ]);
+    await fetchFeed('https://api.github.com/repos/o/r/releases', {
+      fetchImpl: fn,
+      resolve: publicResolve,
+      headers: { authorization: 'Bearer ghp_secret' },
+    });
+    // First hop (same origin) carries the token; the cross-origin hop does not.
+    expect(new Headers(calls[0]?.init.headers).get('authorization')).toBe(
+      'Bearer ghp_secret',
+    );
+    expect(new Headers(calls[1]?.init.headers).get('authorization')).toBeNull();
+  });
+
+  it('keeps the Authorization header on a same-origin redirect', async () => {
+    const { fn, calls } = fakeFetch([
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: 'https://api.github.com/repos/o/r/releases?page=2',
+        },
+      }),
+      new Response('[]', { status: 200 }),
+    ]);
+    await fetchFeed('https://api.github.com/repos/o/r/releases', {
+      fetchImpl: fn,
+      resolve: publicResolve,
+      headers: { authorization: 'Bearer ghp_secret' },
+    });
+    expect(new Headers(calls[1]?.init.headers).get('authorization')).toBe(
+      'Bearer ghp_secret',
+    );
+  });
+});
+
+describe('fetchFeed — custom headers', () => {
+  it('merges caller headers over the defaults (case-insensitively)', async () => {
+    const { fn, calls } = fakeFetch([new Response('{}', { status: 200 })]);
+    await fetchFeed('https://api.github.com/x', {
+      fetchImpl: fn,
+      resolve: publicResolve,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    const headers = new Headers(calls[0]?.init.headers);
+    expect(headers.get('accept')).toBe('application/vnd.github+json');
+    expect(headers.get('x-github-api-version')).toBe('2022-11-28');
+  });
 });
 
 describe('fetchFeed — HTTP errors', () => {
@@ -144,6 +201,24 @@ describe('fetchFeed — HTTP errors', () => {
         resolve: publicResolve,
       }),
     ).rejects.toMatchObject({ code: 'HTTP_CLIENT_ERROR', retryable: false });
+  });
+
+  it('captures rate-limit response headers on a 4xx error', async () => {
+    const { fn } = fakeFetch([
+      new Response('rate limited', {
+        status: 403,
+        headers: { 'x-ratelimit-remaining': '0', 'retry-after': '60' },
+      }),
+    ]);
+    await expect(
+      fetchFeed('https://api.github.com/x', {
+        fetchImpl: fn,
+        resolve: publicResolve,
+      }),
+    ).rejects.toMatchObject({
+      code: 'HTTP_CLIENT_ERROR',
+      responseHeaders: { 'x-ratelimit-remaining': '0', 'retry-after': '60' },
+    });
   });
 });
 

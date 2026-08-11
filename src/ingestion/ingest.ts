@@ -6,15 +6,12 @@ import type {
 } from '@/domain';
 import type { ArticleRow, SourceFetchRow, SourceRow } from '@/domain/types';
 
+import { acquireForSource } from './acquire';
 import { feedAdapter } from './adapters/feed-adapter';
 import type { SourceAdapter } from './adapters/types';
-import {
-  IngestError,
-  type IngestErrorCode,
-  toIngestError,
-} from './http/errors';
+import { type IngestErrorCode, toIngestError } from './http/errors';
 import { fetchFeed as defaultFetchFeed } from './http/fetcher';
-import type { FeedFetchOptions, FeedResponse } from './http/fetcher';
+import type { FeedFetcher, FeedFetchOptions } from './http/fetcher';
 import { deriveHealth } from './health';
 import { CanonicalUrlError } from './normalize/canonical-url';
 import { toArticleInput } from './normalize/normalize';
@@ -56,24 +53,24 @@ export interface SourceHealthWriter {
   updateFetchState(id: string, input: UpdateFetchStateInput): Promise<void>;
 }
 
-/** Feed fetcher seam (satisfied by {@link fetchFeed}). */
-export type FeedFetcher = (
-  url: string,
-  options: FeedFetchOptions,
-) => Promise<FeedResponse>;
-
 export interface IngestDeps {
   articles: ArticleWriter;
   sourceFetches: SourceFetchWriter;
   sources: SourceHealthWriter;
   /** Defaults to the real safe HTTP fetcher. */
   fetchFeed?: FeedFetcher;
-  /** Defaults to the RSS/Atom adapter. */
+  /** Defaults to the RSS/Atom adapter (used only by the feed acquirer). */
   adapter?: SourceAdapter;
   /** Clock seam for deterministic timing in tests. */
   now?: () => Date;
   /** Extra fetch options (timeouts, limits, resolver, injected fetch). */
   fetchOptions?: FeedFetchOptions;
+  /**
+   * Optional server-only GitHub token override (Stage 9B). `undefined` resolves
+   * from the environment; `null` forces an unauthenticated request. Injected in
+   * tests; nothing is overridden in production.
+   */
+  githubToken?: string | null;
 }
 
 export interface IngestResult {
@@ -97,69 +94,57 @@ export async function ingestSource(
   deps: IngestDeps,
 ): Promise<IngestResult> {
   const now = deps.now ?? (() => new Date());
-  const fetchImpl = deps.fetchFeed ?? defaultFetchFeed;
-  const adapter = deps.adapter ?? feedAdapter;
   const startedMs = now().getTime();
 
   const fetchRow = await deps.sourceFetches.start(source.id);
 
   try {
-    if (!source.feed_url) {
-      throw new IngestError(
-        'INVALID_URL',
-        'Source has no feed_url configured',
-        {
-          retryable: false,
-        },
-      );
-    }
-
-    const response = await fetchImpl(source.feed_url, {
-      etag: source.etag,
-      lastModified: source.last_modified,
-      ...deps.fetchOptions,
+    // Source-type dispatch: RSS/Atom, GitHub Releases, or Hacker News all reduce
+    // to the same canonical acquisition result. Everything below this line is
+    // format-agnostic and shared by every Source type.
+    const acquired = await acquireForSource(source, {
+      fetchFeed: deps.fetchFeed ?? defaultFetchFeed,
+      adapter: deps.adapter ?? feedAdapter,
+      fetchOptions: deps.fetchOptions,
+      now,
+      githubToken: deps.githubToken,
     });
 
     const completedAt = now();
     const durationMs = completedAt.getTime() - startedMs;
 
-    if (response.notModified) {
+    if (acquired.notModified) {
       await applyHealth(deps.sources, source, 'success', completedAt, {
-        etag: response.etag ?? undefined,
-        lastModified: response.lastModified ?? undefined,
+        etag: acquired.etag ?? undefined,
+        lastModified: acquired.lastModified ?? undefined,
       });
       await deps.sourceFetches.complete(fetchRow.id, {
         status: 'SKIPPED',
-        httpStatus: response.status,
+        httpStatus: acquired.httpStatus,
         itemsFound: 0,
         itemsNew: 0,
         itemsUpdated: 0,
         durationMs,
         metadata: { notModified: true },
       });
-      return result(source.id, 'SKIPPED', response.status, {
+      return result(source.id, 'SKIPPED', acquired.httpStatus, {
         durationMs,
         notModified: true,
       });
     }
 
-    const parsed = adapter.parse({
-      body: response.body ?? '',
-      contentType: response.contentType,
-    });
-
     let itemsNew = 0;
     let itemsExisting = 0;
     let itemsSkipped = 0;
 
-    for (const item of parsed.items) {
+    for (const item of acquired.items) {
       let input: CreateArticleInput;
       try {
         input = toArticleInput(source.id, item, {
-          defaultLanguage: parsed.language,
+          defaultLanguage: acquired.language,
         });
       } catch (error) {
-        // A single un-canonicalizable URL drops the item, not the feed.
+        // A single un-canonicalizable URL drops the item, not the whole Source.
         if (error instanceof CanonicalUrlError) {
           itemsSkipped += 1;
           continue;
@@ -171,18 +156,18 @@ export async function ingestSource(
       else itemsExisting += 1;
     }
 
-    const itemsFound = parsed.items.length;
+    const itemsFound = acquired.items.length;
     // All present items failed to normalize → PARTIAL; otherwise SUCCESS.
     const status: SourceFetchStatus =
       itemsFound > 0 && itemsSkipped === itemsFound ? 'PARTIAL' : 'SUCCESS';
 
     await applyHealth(deps.sources, source, 'success', completedAt, {
-      etag: response.etag ?? undefined,
-      lastModified: response.lastModified ?? undefined,
+      etag: acquired.etag ?? undefined,
+      lastModified: acquired.lastModified ?? undefined,
     });
     await deps.sourceFetches.complete(fetchRow.id, {
       status,
-      httpStatus: response.status,
+      httpStatus: acquired.httpStatus,
       itemsFound,
       itemsNew,
       itemsUpdated: 0,
@@ -193,7 +178,7 @@ export async function ingestSource(
     return {
       sourceId: source.id,
       status,
-      httpStatus: response.status,
+      httpStatus: acquired.httpStatus,
       itemsFound,
       itemsNew,
       itemsExisting,
