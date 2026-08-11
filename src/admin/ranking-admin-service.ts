@@ -50,16 +50,32 @@ export class AdminRankingService {
       throw new Error('VIEWER role cannot trigger ranking');
     }
 
-    // Calculate ranking (expensive, outside transaction)
-    const ranking = await this.rankingEngine.rankStory(
+    // Prepare ranking (expensive, outside transaction)
+    const prepared = await this.rankingEngine.prepareRanking(
       storyId,
       publicationId,
       force,
     );
 
+    if (!prepared) {
+      // Recent ranking exists and force=false; fetch and return it
+      const existing = await this.rankingRepo.findLatestForStory(
+        storyId,
+        publicationId,
+      );
+      if (!existing) {
+        throw new Error(`Story ${storyId} not found or has no data`);
+      }
+      return existing;
+    }
+
     // Persist ranking + audit atomically
+    let ranking: StoryRankingRow | null = null;
     await withTransaction(async (tx) => {
-      // Audit log (within same transaction as ranking persistence)
+      // Persist ranking (within transaction)
+      ranking = await this.rankingEngine.persistRanking(tx, prepared);
+
+      // Audit log (within SAME transaction)
       await new AdminAuditLogRepository(tx).record({
         actorIdentifier: session.username,
         actorId: null,
@@ -76,6 +92,10 @@ export class AdminRankingService {
         },
       });
     });
+
+    if (!ranking) {
+      throw new Error('Ranking persistence failed');
+    }
 
     return ranking;
   }

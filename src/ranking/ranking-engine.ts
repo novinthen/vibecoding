@@ -21,6 +21,10 @@ import {
  * Gathers data from multiple repositories, calls the pure ranking service,
  * and persists results. This layer handles I/O while keeping the ranking
  * formulas pure and testable.
+ *
+ * Supports both:
+ * - Direct persistence (normal path)
+ * - Prepare-then-persist (admin path with atomic audit)
  */
 export class RankingEngine {
   private readonly storyRepo: StoryRepository;
@@ -40,16 +44,29 @@ export class RankingEngine {
   }
 
   /**
-   * Rank one Story and persist the result. Returns the created ranking row.
-   * Optionally publication-specific (includes editorial context).
-   * Force=true recalculates even if a recent ranking exists.
+   * Prepare ranking calculation without persisting.
+   * Returns persistence input for atomic admin audit workflow.
+   *
+   * @param storyId - Story to rank
+   * @param publicationId - Optional publication-specific ranking
+   * @param force - Bypass cache check (only affects shouldSkip logic)
    */
-  async rankStory(
+  async prepareRanking(
     storyId: string,
-    publicationId?: string | null,
+    publicationId: string | null,
     force = false,
-  ): Promise<StoryRankingRow> {
-    // Check if a recent ranking exists (within last hour, same version)
+  ): Promise<{
+    storyId: string;
+    publicationId: string | null;
+    rankingMethod: string;
+    rankingVersion: string;
+    calculatedScore: number;
+    signals: any;
+    calculatedAt: Date;
+    timeHorizon: string | null;
+    explanation: string | null;
+  } | null> {
+    // Check if a recent ranking exists (unless force=true)
     if (!force) {
       const existing = await this.rankingRepo.findLatestForStory(
         storyId,
@@ -59,8 +76,8 @@ export class RankingEngine {
         const ageMinutes =
           (Date.now() - new Date(existing.calculated_at).getTime()) / (1000 * 60);
         if (ageMinutes < 60) {
-          // Recent ranking exists; return it without recalculating
-          return existing;
+          // Recent ranking exists; return null (skip)
+          return null;
         }
       }
     }
@@ -68,14 +85,14 @@ export class RankingEngine {
     // Gather data for ranking
     const input = await this.gatherRankingInput(storyId, publicationId ?? null);
     if (!input) {
-      throw new Error(`Story ${storyId} not found or has no data`);
+      return null;
     }
 
     // Calculate ranking
     const result = calculateStoryRanking(input, RANKING_CONFIG_V1);
 
-    // Persist
-    const ranking = await this.rankingRepo.create({
+    // Return persistence input (not yet persisted)
+    return {
       storyId,
       publicationId: publicationId ?? null,
       rankingMethod: result.method,
@@ -85,9 +102,68 @@ export class RankingEngine {
       calculatedAt: new Date(),
       timeHorizon: result.timeHorizon,
       explanation: result.explanation,
-    });
+    };
+  }
 
-    return ranking;
+  /**
+   * Persist a prepared ranking using the given database connection.
+   * Used for atomic admin audit workflow (same transaction).
+   *
+   * @param db - Database connection (may be in-transaction)
+   * @param input - Prepared ranking from prepareRanking()
+   */
+  async persistRanking(
+    db: Db,
+    input: {
+      storyId: string;
+      publicationId: string | null;
+      rankingMethod: string;
+      rankingVersion: string;
+      calculatedScore: number;
+      signals: any;
+      calculatedAt: Date;
+      timeHorizon: string | null;
+      explanation: string | null;
+    },
+  ): Promise<StoryRankingRow> {
+    const rankingRepo = new StoryRankingRepository(db);
+    return rankingRepo.create({
+      storyId: input.storyId,
+      publicationId: input.publicationId,
+      rankingMethod: input.rankingMethod,
+      rankingVersion: input.rankingVersion,
+      calculatedScore: input.calculatedScore,
+      signals: input.signals,
+      calculatedAt: input.calculatedAt,
+      timeHorizon: input.timeHorizon,
+      explanation: input.explanation,
+    });
+  }
+
+  /**
+   * Rank one Story and persist the result directly (normal path).
+   * For admin operations requiring atomic audit, use prepareRanking() + persistRanking().
+   */
+  async rankStory(
+    storyId: string,
+    publicationId?: string | null,
+    force = false,
+  ): Promise<StoryRankingRow> {
+    const prepared = await this.prepareRanking(storyId, publicationId ?? null, force);
+    if (!prepared) {
+      // Recent ranking exists; fetch and return it
+      const existing = await this.rankingRepo.findLatestForStory(
+        storyId,
+        publicationId ?? null,
+      );
+      if (!existing) {
+        throw new Error(`Story ${storyId} not found or has no data`);
+      }
+      return existing;
+    }
+
+    // Persist directly
+    return this.persistRanking(this.db, prepared);
   }
 
   /**
