@@ -6,7 +6,12 @@ import type {
   UpdateFetchStateInput,
 } from '@/domain';
 import type { ArticleRow, SourceFetchRow, SourceRow } from '@/domain/types';
-import { ingestSource, type FeedFetcher, type IngestDeps } from '@/ingestion';
+import {
+  ingestSource,
+  IngestError,
+  type FeedFetcher,
+  type IngestDeps,
+} from '@/ingestion';
 import type { FeedResponse } from '@/ingestion';
 
 /**
@@ -19,14 +24,25 @@ import type { FeedResponse } from '@/ingestion';
 class FakeArticles {
   readonly rows: ArticleRow[] = [];
   private seq = 0;
-  createIfAbsent(input: CreateArticleInput): Promise<ArticleRow | null> {
+  createOrRefresh(input: CreateArticleInput): Promise<{
+    row: ArticleRow;
+    outcome: 'created' | 'updated' | 'unchanged';
+  }> {
     const clash = this.rows.find(
       (r) =>
         r.source_id === input.sourceId &&
         ((input.externalId != null && r.external_id === input.externalId) ||
           (input.urlHash != null && r.url_hash === input.urlHash)),
     );
-    if (clash) return Promise.resolve(null);
+    if (clash) {
+      const changed = (input.contentHash ?? null) !== clash.content_hash;
+      if (changed) {
+        clash.original_title = input.originalTitle;
+        clash.content_hash = input.contentHash ?? null;
+        return Promise.resolve({ row: clash, outcome: 'updated' });
+      }
+      return Promise.resolve({ row: clash, outcome: 'unchanged' });
+    }
     this.seq += 1;
     const row = {
       id: `article-${this.seq}`,
@@ -39,7 +55,7 @@ class FakeArticles {
       content_hash: input.contentHash ?? null,
     } as ArticleRow;
     this.rows.push(row);
-    return Promise.resolve(row);
+    return Promise.resolve({ row, outcome: 'created' });
   }
 }
 
@@ -159,13 +175,26 @@ describe('ingestSource — GitHub dispatch', () => {
     expect(deps.articles.rows[0]?.external_id).toBe('github:release:100');
   });
 
-  it('dedups an edited release (same stable id) — no duplicate Article', async () => {
+  it('refreshes an edited release in place (same stable id) — no duplicate Article', async () => {
     const deps = depsWith(jsonFetcher({ '/releases': [release('v1')] }));
     await ingestSource(githubSource(), deps);
     // Re-run with an edited title but the same release id.
     deps.fetchFeed = jsonFetcher({ '/releases': [release('v1 (edited)')] });
     const second = await ingestSource(githubSource(), deps);
     expect(second.itemsNew).toBe(0);
+    // Edited content refreshes the existing Article in place (source facts only).
+    expect(second.itemsUpdated).toBe(1);
+    expect(second.itemsExisting).toBe(0);
+    expect(deps.articles.rows).toHaveLength(1);
+    expect(deps.articles.rows[0]?.original_title).toBe('v1 (edited)');
+  });
+
+  it('leaves an unchanged release untouched on re-run', async () => {
+    const deps = depsWith(jsonFetcher({ '/releases': [release('v1')] }));
+    await ingestSource(githubSource(), deps);
+    const second = await ingestSource(githubSource(), deps);
+    expect(second.itemsNew).toBe(0);
+    expect(second.itemsUpdated).toBe(0);
     expect(second.itemsExisting).toBe(1);
     expect(deps.articles.rows).toHaveLength(1);
   });
@@ -194,5 +223,146 @@ describe('ingestSource — Hacker News dispatch', () => {
     expect(second.itemsNew).toBe(0);
     expect(second.itemsExisting).toBe(1);
     expect(deps.sourceFetches.lastCompleted.status).toBe('SUCCESS');
+  });
+
+  /** List [7,8] succeeds; item behaviour is per-id. */
+  function hnFailureFetcher(
+    behaviour: (id: number) => Promise<FeedResponse> | FeedResponse,
+  ): FeedFetcher {
+    const validStory = (id: number): FeedResponse => ({
+      status: 200,
+      notModified: false,
+      body: JSON.stringify({
+        id,
+        type: 'story',
+        by: 'a',
+        time: 1_700_000_000,
+        title: `HN ${id}`,
+        url: `https://example.com/${id}`,
+      }),
+      etag: null,
+      lastModified: null,
+      contentType: 'application/json',
+      finalUrl: `item/${id}`,
+    });
+    return (url) => {
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({
+          status: 200,
+          notModified: false,
+          body: JSON.stringify([7, 8]),
+          etag: null,
+          lastModified: null,
+          contentType: 'application/json',
+          finalUrl: url,
+        });
+      }
+      const id = Number(url.match(/item\/(\d+)\.json/)?.[1] ?? 0);
+      if (id === 7) return Promise.resolve(behaviour(id));
+      return Promise.resolve(validStory(id));
+    };
+  }
+
+  it('reports PARTIAL when one item 5xx fails and another succeeds', async () => {
+    const deps = depsWith(
+      hnFailureFetcher(() =>
+        Promise.reject(
+          new IngestError('HTTP_SERVER_ERROR', 'boom', {
+            retryable: true,
+            httpStatus: 503,
+          }),
+        ),
+      ),
+    );
+    const result = await ingestSource(hnSource(), deps);
+    expect(result.status).toBe('PARTIAL');
+    expect(result.itemsNew).toBe(1);
+    expect(result.itemsFailed).toBe(1);
+    expect(deps.sourceFetches.lastCompleted.status).toBe('PARTIAL');
+    const meta = deps.sourceFetches.lastCompleted.metadata as {
+      itemsFailed?: number;
+      retryableFailures?: number;
+    };
+    expect(meta.itemsFailed).toBe(1);
+    expect(meta.retryableFailures).toBe(1);
+  });
+
+  it('reports PARTIAL when one item times out and another succeeds', async () => {
+    const deps = depsWith(
+      hnFailureFetcher(() => {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        return Promise.reject(err);
+      }),
+    );
+    const result = await ingestSource(hnSource(), deps);
+    expect(result.status).toBe('PARTIAL');
+    expect(result.itemsNew).toBe(1);
+    expect(result.itemsFailed).toBe(1);
+  });
+
+  it('does NOT report SUCCESS when every requested item fails to acquire', async () => {
+    const allFail: FeedFetcher = (url) => {
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({
+          status: 200,
+          notModified: false,
+          body: JSON.stringify([7, 8]),
+          etag: null,
+          lastModified: null,
+          contentType: 'application/json',
+          finalUrl: url,
+        });
+      }
+      return Promise.reject(
+        new IngestError('HTTP_SERVER_ERROR', 'boom', {
+          retryable: true,
+          httpStatus: 500,
+        }),
+      );
+    };
+    const deps = depsWith(allFail);
+    const result = await ingestSource(hnSource(), deps);
+    expect(result.status).toBe('FAILED');
+    expect(result.itemsNew).toBe(0);
+    expect(result.itemsFailed).toBe(2);
+    expect(result.errorCode).toBe('HTTP_SERVER_ERROR');
+    expect(deps.sourceFetches.lastCompleted.status).toBe('FAILED');
+  });
+
+  it('reports SUCCESS (not failure) when items are intentional skips only', async () => {
+    // Both ids resolve to non-story items (comment + deleted) → healthy, empty.
+    const skipFetcher: FeedFetcher = (url) => {
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({
+          status: 200,
+          notModified: false,
+          body: JSON.stringify([7, 8]),
+          etag: null,
+          lastModified: null,
+          contentType: 'application/json',
+          finalUrl: url,
+        });
+      }
+      const id = Number(url.match(/item\/(\d+)\.json/)?.[1] ?? 0);
+      const body =
+        id === 7
+          ? { id: 7, type: 'comment', by: 'x', time: 1, text: 'c' }
+          : { id: 8, deleted: true };
+      return Promise.resolve({
+        status: 200,
+        notModified: false,
+        body: JSON.stringify(body),
+        etag: null,
+        lastModified: null,
+        contentType: 'application/json',
+        finalUrl: url,
+      });
+    };
+    const deps = depsWith(skipFetcher);
+    const result = await ingestSource(hnSource(), deps);
+    expect(result.status).toBe('SUCCESS');
+    expect(result.itemsFailed).toBe(0);
+    expect(result.itemsNew).toBe(0);
   });
 });

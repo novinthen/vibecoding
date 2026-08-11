@@ -1,7 +1,7 @@
 import type { SourceRow } from '@/domain/types';
 
 import type { NormalizedItem } from '../adapters/types';
-import { IngestError } from '../http/errors';
+import { IngestError, toIngestError } from '../http/errors';
 import {
   parseSourceConfig,
   type HackerNewsSourceConfig,
@@ -9,9 +9,13 @@ import {
 
 import type {
   AcquisitionContext,
+  AcquisitionItemFailure,
   AcquisitionResult,
   SourceAcquirer,
 } from './types';
+
+/** Cap on how many per-item failures are retained in bounded metadata. */
+const MAX_TRACKED_FAILURES = 25;
 
 /**
  * Hacker News acquirer (Stage 9B).
@@ -54,7 +58,9 @@ export const hackerNewsAcquirer: SourceAcquirer = {
     const jsonHeaders = { accept: 'application/json' };
     let httpStatus = 200;
 
-    // Resolve the candidate item ids, bounded by maxItems.
+    // Resolve the candidate item ids, bounded by maxItems. A failure of the LIST
+    // fetch throws (the whole Source is unreachable → FAILED), which is correct:
+    // a total outage must never look healthy.
     let ids: number[];
     if (config.mode === 'ids') {
       ids = config.ids.slice(0, config.maxItems);
@@ -68,9 +74,11 @@ export const hackerNewsAcquirer: SourceAcquirer = {
       ids = parseIdList(response.body ?? '').slice(0, config.maxItems);
     }
 
+    const validIds = ids.filter((id) => Number.isInteger(id) && id > 0);
+
     const items: NormalizedItem[] = [];
-    for (const id of ids) {
-      if (!Number.isInteger(id) || id <= 0) continue;
+    const failures: AcquisitionItemFailure[] = [];
+    for (const id of validIds) {
       let body: string | null;
       try {
         const response = await ctx.fetchFeed(`${HN_API_BASE}/item/${id}.json`, {
@@ -78,10 +86,24 @@ export const hackerNewsAcquirer: SourceAcquirer = {
           headers: jsonHeaders,
         });
         body = response.body;
-      } catch {
-        // Isolate a single failed item fetch — one bad item never fails the run.
+      } catch (error) {
+        // A single item's FETCH failure (timeout/network/5xx/rate limit) is
+        // isolated — it never aborts the Source — but it is recorded as a real
+        // acquisition failure so the run is downgraded to PARTIAL (or FAILED if
+        // every item fails), never a healthy SUCCESS with zero items.
+        const ingestError = toIngestError(error);
+        if (failures.length < MAX_TRACKED_FAILURES) {
+          failures.push({
+            ref: `hn:item:${id}`,
+            code: ingestError.code,
+            message: ingestError.message,
+            retryable: ingestError.retryable,
+          });
+        }
         continue;
       }
+      // A parsed-but-excluded item (comment, dead/deleted, malformed, missing) is
+      // an INTENTIONAL skip, not a failure — it does not affect health.
       const item = toStoryItem(body ?? '', source.language ?? null);
       if (item) items.push(item);
     }
@@ -93,6 +115,8 @@ export const hackerNewsAcquirer: SourceAcquirer = {
       language: source.language ?? null,
       etag: null,
       lastModified: null,
+      failures,
+      attempted: validIds.length,
     };
   },
 };

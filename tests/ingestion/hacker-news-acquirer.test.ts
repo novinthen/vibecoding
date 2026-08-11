@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SourceRow } from '@/domain/types';
-import { hackerNewsAcquirer } from '@/ingestion';
+import { hackerNewsAcquirer, IngestError } from '@/ingestion';
 import type {
   AcquisitionContext,
   FeedFetcher,
@@ -276,5 +276,126 @@ describe('hackerNewsAcquirer — item selection', () => {
     await expect(
       hackerNewsAcquirer.acquire(makeSource(), ctxWith(fetcher)),
     ).rejects.toMatchObject({ code: 'MALFORMED_FEED' });
+  });
+});
+
+describe('hackerNewsAcquirer — per-item failure observability', () => {
+  /** A fetcher where the list succeeds and each item id maps to a behaviour. */
+  function itemBehaviourFetcher(
+    ids: number[],
+    behaviour: (id: number) => Promise<FeedResponse> | FeedResponse,
+  ): FeedFetcher {
+    return (url) => {
+      if (url.includes('topstories.json')) {
+        return Promise.resolve({
+          status: 200,
+          notModified: false,
+          body: JSON.stringify(ids),
+          etag: null,
+          lastModified: null,
+          contentType: 'application/json',
+          finalUrl: url,
+        });
+      }
+      const match = url.match(/item\/(\d+)\.json/);
+      const id = match ? Number(match[1]) : 0;
+      return Promise.resolve(behaviour(id));
+    };
+  }
+
+  const okStory = (id: number): FeedResponse => ({
+    status: 200,
+    notModified: false,
+    body: JSON.stringify({
+      id,
+      type: 'story',
+      by: 'a',
+      time: 1_700_000_000,
+      title: `story ${id}`,
+      url: `https://example.com/${id}`,
+    }),
+    etag: null,
+    lastModified: null,
+    contentType: 'application/json',
+    finalUrl: `item/${id}`,
+  });
+
+  it('records a 5xx item as an acquisition failure while keeping valid items', async () => {
+    const fetcher = itemBehaviourFetcher([111, 222], (id) => {
+      if (id === 111) {
+        return Promise.reject(
+          new IngestError('HTTP_SERVER_ERROR', 'Upstream server error', {
+            retryable: true,
+            httpStatus: 503,
+          }),
+        );
+      }
+      return okStory(id);
+    });
+    const result = await hackerNewsAcquirer.acquire(
+      makeSource(),
+      ctxWith(fetcher),
+    );
+    expect(result.items.map((i) => i.externalId)).toEqual(['hn:item:222']);
+    expect(result.attempted).toBe(2);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures?.[0]).toMatchObject({
+      ref: 'hn:item:111',
+      code: 'HTTP_SERVER_ERROR',
+      retryable: true,
+    });
+  });
+
+  it('records a timed-out item as a retryable acquisition failure', async () => {
+    const fetcher = itemBehaviourFetcher([111, 222], (id) => {
+      if (id === 111) {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        return Promise.reject(err);
+      }
+      return okStory(id);
+    });
+    const result = await hackerNewsAcquirer.acquire(
+      makeSource(),
+      ctxWith(fetcher),
+    );
+    expect(result.items).toHaveLength(1);
+    expect(result.failures?.[0]).toMatchObject({
+      code: 'TIMEOUT',
+      retryable: true,
+    });
+  });
+
+  it('reports every requested item as a failure when all item fetches fail', async () => {
+    const fetcher = itemBehaviourFetcher([111, 222], () =>
+      Promise.reject(
+        new IngestError('HTTP_SERVER_ERROR', 'boom', {
+          retryable: true,
+          httpStatus: 500,
+        }),
+      ),
+    );
+    const result = await hackerNewsAcquirer.acquire(
+      makeSource(),
+      ctxWith(fetcher),
+    );
+    expect(result.items).toHaveLength(0);
+    expect(result.failures).toHaveLength(2);
+    expect(result.attempted).toBe(2);
+  });
+
+  it('treats dead/comment items as intentional skips, not failures', async () => {
+    const fetcher = mapFetcher({
+      'topstories.json': [333, 555],
+      'item/333.json': comment,
+      'item/555.json': dead,
+    });
+    const result = await hackerNewsAcquirer.acquire(
+      makeSource(),
+      ctxWith(fetcher),
+    );
+    expect(result.items).toHaveLength(0);
+    expect(result.failures).toHaveLength(0);
+    expect(result.attempted).toBe(2);
   });
 });

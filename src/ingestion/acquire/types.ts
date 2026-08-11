@@ -2,6 +2,7 @@ import type { SourceType } from '@/domain/enums';
 import type { SourceRow } from '@/domain/types';
 
 import type { NormalizedItem, SourceAdapter } from '../adapters/types';
+import type { IngestErrorCode } from '../http/errors';
 import type { FeedFetcher, FeedFetchOptions } from '../http/fetcher';
 
 /**
@@ -22,6 +23,25 @@ import type { FeedFetcher, FeedFetchOptions } from '../http/fetcher';
  */
 
 /**
+ * One bounded, per-item acquisition FAILURE — an item that could not be fetched
+ * (timeout, network, 5xx, rate limit), as opposed to an item that was
+ * intentionally excluded (a comment, a dead/deleted item, a malformed payload).
+ * The distinction matters for observability: intentional exclusions are healthy;
+ * acquisition failures degrade the run to PARTIAL, or to FAILED when every
+ * requested item fails. Never contains secrets.
+ */
+export interface AcquisitionItemFailure {
+  /** Provider reference for the item, e.g. `hn:item:123`. */
+  ref: string;
+  /** Classified failure code (mirrors SourceFetch error codes). */
+  code: IngestErrorCode;
+  /** Human-readable, secret-free message. */
+  message: string;
+  /** Whether retrying the same request could plausibly succeed later. */
+  retryable: boolean;
+}
+
+/**
  * The canonical outcome of acquiring one Source, independent of wire format.
  * Mirrors the fields the orchestrator needs to record a SourceFetch row and
  * update Source health.
@@ -39,6 +59,19 @@ export interface AcquisitionResult {
   etag: string | null;
   /** Last-Modified validator to persist, or null. */
   lastModified: string | null;
+  /**
+   * Bounded per-item acquisition failures encountered while assembling `items`
+   * (providers that fetch items individually, e.g. Hacker News). Empty/undefined
+   * when the provider fetches a single resource whose failure throws instead
+   * (e.g. an RSS feed body or a GitHub releases page).
+   */
+  failures?: AcquisitionItemFailure[];
+  /**
+   * The number of distinct items the provider ATTEMPTED to acquire (e.g. the
+   * count of Hacker News ids requested), when meaningful. Lets the orchestrator
+   * tell "healthy but nothing relevant" from "everything failed".
+   */
+  attempted?: number;
 }
 
 /** Cross-cutting dependencies every acquirer shares. */

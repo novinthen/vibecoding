@@ -36,8 +36,59 @@ function sourceInputFromForm(formData: FormData) {
     language: formData.get('language') ?? '',
     pollInterval: formData.get('pollInterval') ?? '',
     defaultTopicId: formData.get('defaultTopicId') ?? '',
-    sourceConfig: formData.get('sourceConfig') ?? '',
+    sourceConfig: sourceConfigFromForm(formData),
   };
+}
+
+/**
+ * Assemble the source-type-specific adapter config from the operator-friendly
+ * form fields into a plain object. Returns `undefined` for types that carry no
+ * config (RSS/Atom/…). Numeric fields are omitted when blank so the schema's
+ * defaults apply. This only SHAPES the input; the source service performs the
+ * authoritative per-type Zod validation (owner/repo/mode/bounds), and no secret
+ * (e.g. a GitHub token) is ever accepted here.
+ */
+function sourceConfigFromForm(
+  formData: FormData,
+): Record<string, unknown> | undefined {
+  const type = String(formData.get('sourceType') ?? '');
+  const str = (name: string) => String(formData.get(name) ?? '').trim();
+  const num = (name: string): number | undefined => {
+    const raw = str(name);
+    if (raw === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : Number.NaN; // NaN → schema rejects it.
+  };
+
+  if (type === 'GITHUB') {
+    const config: Record<string, unknown> = {
+      owner: str('cfg_owner'),
+      repo: str('cfg_repo'),
+      prereleases: str('cfg_prereleases') || 'exclude',
+    };
+    const perPage = num('cfg_perPage');
+    const maxPages = num('cfg_maxPages');
+    if (perPage !== undefined) config.perPage = perPage;
+    if (maxPages !== undefined) config.maxPages = maxPages;
+    return config;
+  }
+
+  if (type === 'HACKER_NEWS') {
+    const mode = str('cfg_mode') || 'top';
+    const config: Record<string, unknown> = { mode };
+    const maxItems = num('cfg_maxItems');
+    if (maxItems !== undefined) config.maxItems = maxItems;
+    if (mode === 'ids') {
+      config.ids = str('cfg_ids')
+        .split(/[\s,]+/)
+        .filter((s) => s.length > 0)
+        .map((s) => Number(s));
+    }
+    return config;
+  }
+
+  // RSS / ATOM / RSSHUB / API / MANUAL carry no adapter config.
+  return undefined;
 }
 
 export async function createSourceAction(

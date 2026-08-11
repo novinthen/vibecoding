@@ -14,6 +14,7 @@ import { ArticleRepository } from '@/domain/repositories/article-repository';
 import { SourceFetchRepository } from '@/domain/repositories/source-fetch-repository';
 import { SourceRepository } from '@/domain/repositories/source-repository';
 import { ingestSource } from '@/ingestion/ingest';
+import type { IngestDeps } from '@/ingestion/ingest';
 
 import { buildJobResult } from './job-runner';
 import type { ItemFailure, JobOutcome } from './types';
@@ -25,6 +26,12 @@ export interface IngestionJobOptions {
   minHealth?: 'HEALTHY' | 'DEGRADED' | 'UNKNOWN';
   /** Specific Source IDs to process (overrides enabled/health filters, max 100). */
   sourceIds?: string[];
+  /**
+   * Test-only overrides for the Stage 3 ingestion dependencies (e.g. an injected
+   * `fetchFeed` so a mixed-source run is deterministic and never touches the
+   * network). Never set in production — the real safe fetcher is used.
+   */
+  ingestOverrides?: Partial<IngestDeps>;
 }
 
 const JOB_NAME = 'ingest';
@@ -96,6 +103,7 @@ export async function runIngestionJob(
         articles: articleRepo,
         sourceFetches: sourceFetchRepo,
         sources: sourceRepo,
+        ...options.ingestOverrides,
       });
 
       if (result.status === 'SUCCESS') {

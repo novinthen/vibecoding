@@ -331,14 +331,99 @@ Admin dashboard sections:
 
 Manual trigger buttons can reuse the same `runJob()` interface with proper authorization.
 
+## Stage 9B — Developer Intelligence Sources
+
+Stage 9B adds **GitHub Releases** and **Hacker News** as Source types. They reuse
+the Stage 9A ingestion job and the Stage 3 engine unchanged — the ingestion job
+processes them exactly like an RSS Source. Nothing about scheduling, locking, or
+job persistence changes.
+
+### Configuring a developer-intelligence Source
+
+Create the Source in `/admin/sources` (or via the registry) and fill the
+type-specific adapter config; it is stored in the `sources.source_config` JSONB
+column and validated per type on save.
+
+- **GitHub Releases** (`source_type = GITHUB`):
+  `{ owner, repo, prereleases: exclude|include|only, perPage (1–100), maxPages
+  (1–5) }`. The endpoint is always the official
+  `https://api.github.com/repos/{owner}/{repo}/releases` — `owner`/`repo` are
+  validated path segments, never an arbitrary URL. Releases only (never commits or
+  issues). Drafts are always excluded; the prerelease policy is explicit.
+- **Hacker News** (`source_type = HACKER_NEWS`):
+  `{ mode: top|best|new|ids, maxItems (1–200), ids }`. The official Firebase API;
+  story items only. Comments, deleted/dead, and malformed items are excluded. A
+  text-only Ask HN uses its HN discussion URL as the canonical target.
+
+### `GITHUB_TOKEN` (optional, server-only)
+
+Set `GITHUB_TOKEN` in the environment to authenticate GitHub REST requests and
+raise the rate limit above the anonymous ceiling. It is **never** stored in
+`source_config`, sent to the browser, or logged. Unset means unauthenticated
+requests. A GitHub 403/429 caused by rate limiting is classified as
+`RATE_LIMITED` (retryable) and surfaced in the `SourceFetch` error code.
+
+### Bounded API behaviour
+
+Both providers are bounded by config and share the Stage 3 safe fetcher (timeout,
+bounded redirects, response-size cap, SSRF protection). GitHub pagination is
+capped by `perPage`/`maxPages`; Hacker News item fetches are capped by `maxItems`.
+GitHub uses ETag conditional requests (a 304 short-circuits to `SKIPPED`). The
+safe fetcher drops the `Authorization` header before following a cross-origin
+redirect, so a token can never leak to a redirected host.
+
+### Source health and PARTIAL/FAILED semantics
+
+Hacker News fetches items individually. The run distinguishes **intentional
+skips** (comment, dead/deleted, malformed — healthy) from **acquisition failures**
+(timeout, network, 5xx, rate limit):
+
+- some item failures with at least one success → `SourceFetch` **PARTIAL**
+  (still a successful contact for health; failure detail is recorded in
+  `metadata.itemsFailed` / `metadata.failures` with retryability);
+- **every** requested item failing (zero items) → **FAILED**, which degrades
+  Source health. This is never reported as a healthy `SUCCESS` with zero items.
+
+A failure of the HN story-*list* fetch (a total outage) throws and fails the whole
+Source, as for any other Source. GitHub fetches a single releases resource, so its
+failures fail the Source directly.
+
+### Edited GitHub release policy
+
+Releases carry a **stable external id** (`github:release:{id}`). Re-ingesting an
+edited release does not duplicate: the ingestion path uses `createOrRefresh`,
+which refreshes the existing Article's **source facts in place** when the content
+hash changes (or a newer `source_updated_at` arrives), counted as `itemsUpdated`
+in the `SourceFetch` row. Only source-supplied columns are updated —
+editorial/publication `status`, AI enrichment, Story membership, and ranking are
+never touched. (GitHub's Releases payload has no top-level `updated_at`, so the
+content hash is the primary edit signal; `updated_at` is read defensively if a
+payload ever provides it.)
+
+### Mixed-source ingestion job
+
+The Stage 9A ingestion job processes RSS, GitHub, and Hacker News Sources in one
+bounded run with no special-casing. A repeated run is idempotent (no duplicate
+Articles), each Source records its own `SourceFetch`, and **nothing is
+auto-published**. This is covered end-to-end against real Postgres in
+`tests/ingestion/mixed-source.integration.test.ts` (including the Stage 9A
+`runIngestionJob` path).
+
+### No ranking use of GitHub/HN engagement
+
+GitHub reactions and Hacker News score/comment counts are volatile engagement
+signals. They are **not** captured onto the Article and **never** feed Stage 8
+ranking. Ranking behaviour is unchanged by Stage 9B.
+
 ## Limitations & Future Work
 
-### Not Implemented in Stage 9A
+### Not Implemented in Stage 9B
 
-- **Admin UI for job runs** — visibility exists via SQL, not yet in admin dashboard
+- **GitHub tracking beyond Releases** — star velocity, changelog intelligence,
+  Tool profiles, Release Watch, and domain-specific GitHub Trending remain
+  deferred (later Stage 9 work)
+- **Admin UI for job runs** — visibility exists via SQL and `/admin/jobs`
 - **Authenticated HTTP job endpoints** — only CLI is implemented; API routes can be added
-- **GitHub ingestion** — deferred to Stage 9 (Developer Intelligence)
-- **Hacker News ingestion** — deferred to Stage 9
 - **Inngest integration** — simpler scheduling model used; Inngest can replace external scheduler later
 - **Auto-publishing** — remains editorial boundary (PublicationStory controlled manually)
 - **Story auto-merging** — clustering creates/assigns but never merges Stories automatically

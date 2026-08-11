@@ -88,43 +88,15 @@ const optionalTopicId = z
   .or(z.literal('').transform(() => null));
 
 /**
- * Raw source-type adapter configuration as submitted by the admin form: a JSON
- * string (empty → undefined = no config). The JSON is parsed to an object here;
- * the *shape* is then validated per source type by the source service via
+ * Source-type adapter configuration as an already-assembled object (the server
+ * action builds it from the type-specific form fields). Here it is only shape-
+ * checked as "an object or undefined"; the AUTHORITATIVE per-type validation
+ * (owner/repo/mode/bounds) happens in the source service via
  * {@link import('@/ingestion/source-config').sourceConfigForStorage}, because the
- * type selects which config schema applies. Bounded to a small size — adapter
- * config is tiny.
+ * Source type selects which config schema applies. `undefined` means "no config
+ * submitted" (RSS/Atom, or an edit that left config untouched).
  */
-const optionalSourceConfigJson = z
-  .string()
-  .trim()
-  .max(4096)
-  .optional()
-  .transform((value, ctx) => {
-    if (!value || value === '' || value === '{}') return undefined;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Source config must be valid JSON.',
-      });
-      return z.NEVER;
-    }
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Source config must be a JSON object.',
-      });
-      return z.NEVER;
-    }
-    return parsed as Record<string, unknown>;
-  });
+const optionalSourceConfigObject = z.record(z.string(), z.unknown()).optional();
 
 export const createSourceSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -136,7 +108,7 @@ export const createSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
-  sourceConfig: optionalSourceConfigJson,
+  sourceConfig: optionalSourceConfigObject,
 });
 export type CreateSourceValues = z.infer<typeof createSourceSchema>;
 
@@ -149,7 +121,7 @@ export const updateSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
-  sourceConfig: optionalSourceConfigJson,
+  sourceConfig: optionalSourceConfigObject,
 });
 export type UpdateSourceValues = z.infer<typeof updateSourceSchema>;
 

@@ -51,6 +51,7 @@ interface GithubRelease {
   prerelease: unknown;
   created_at: unknown;
   published_at: unknown;
+  updated_at: unknown;
   author: unknown;
 }
 
@@ -213,16 +214,25 @@ function toReleaseItem(
   const createdAt = parseDate(
     typeof release.created_at === 'string' ? release.created_at : null,
   );
+  // GitHub's Releases payload does not carry a top-level `updated_at` today, so
+  // this is usually null and edits are detected downstream by a content-hash
+  // change on the stable release id (see the edited-release policy in
+  // docs/OPERATIONS.md). It is read defensively so that if a payload ever does
+  // expose it, the edit timestamp is preserved as a source fact.
+  const updatedAt = parseDate(
+    typeof release.updated_at === 'string' ? release.updated_at : null,
+  );
 
   return {
-    // Stable across tag renames and edits, so edited releases never duplicate.
+    // Stable across tag renames and edits, so an edited release maps to the same
+    // Article (refreshed in place, never duplicated).
     externalId: `github:release:${id}`,
     url: htmlUrl,
     title,
     excerpt: releaseExcerpt(release.body),
     author: releaseAuthor(release.author),
     publishedAt: publishedAt ?? createdAt,
-    updatedAt: null,
+    updatedAt,
     imageUrl: null,
     language,
   };

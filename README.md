@@ -18,20 +18,48 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 9A — Production Automation & Scheduling.**
+**Stage 9B — Developer Intelligence Source Expansion.**
 
-The platform now has bounded, safe, repeatable job automation for the full intelligence pipeline (ingestion → enrichment → clustering → ranking). Jobs run automatically without manual intervention while preserving editorial control and observability.
+Adds two developer-intelligence inputs — **GitHub Releases** and **Hacker
+News** — as first-class Sources. They are new _inputs_, not new _pipelines_:
+both flow through the existing acquisition → NormalizedItem → canonicalization →
+Article/dedup → SourceFetch/health → enrichment → clustering → ranking → Stage 9A
+automation path unchanged.
 
 **Key capabilities:**
 
-- **Session-correct advisory locks** — PostgreSQL-native overlap prevention using dedicated PoolClient
-- **Bounded execution** — all jobs have finite default batch limits (ingestion: 50, enrichment: 100, clustering: 50, ranking: 100)
-- **Stage lock isolation** — standalone jobs cannot overlap pipeline stages (dependency ordering preserved)
-- **Observability** — all runs persisted to `job_runs` table, admin UI at `/admin/jobs`
-- **CLI interface** — `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`
-- **External scheduler ready** — cron/Vercel Cron/GitHub Actions can trigger jobs via CLI
+- **Source-type acquisition seam** (`src/ingestion/acquire`) — one `SourceAcquirer`
+  per input; `ingestSource` dispatches on `source_type`; RSS/Atom behaviour is
+  unchanged.
+- **GitHub Releases** — official REST API, releases only, validated `owner`/`repo`
+  (fixed endpoint), bounded pagination, draft exclusion, explicit prerelease
+  policy, stable release id, canonical release URL, bounded excerpt, ETag
+  conditional requests, optional server-only `GITHUB_TOKEN`, 403/429 rate-limit
+  classification.
+- **Hacker News** — official Firebase API, story items only (comments/deleted/
+  dead/malformed excluded), bounded `top`/`best`/`new`/explicit ids, external
+  target URL or HN discussion URL. Engagement counts never affect ranking.
+- **Edited-release refresh** — a stable external id plus a provenance-safe
+  `createOrRefresh` updates an edited item's **source facts in place** (counted as
+  `itemsUpdated`), never duplicating and never touching editorial/AI/Story/ranking
+  state.
+- **Per-item failure observability** — Hacker News per-item fetch failures are
+  recorded distinctly from intentional skips: some failures → `PARTIAL`, all
+  requested items failing → `FAILED` (never a healthy `SUCCESS` with zero items).
+- **Per-source configuration** — a `source_config` JSONB column (migration `0018`)
+  with per-type validation and operator-friendly admin controls. Secrets stay
+  server-only (`GITHUB_TOKEN`), never stored in config.
 
 See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+---
+
+### Previously: Stage 9A — Production Automation & Scheduling
+
+Bounded, safe, repeatable job automation for the full intelligence pipeline
+(ingestion → enrichment → clustering → ranking): session-correct advisory locks,
+finite default batch limits, stage-lock isolation, `job_runs` observability, a
+CLI (`npm run jobs:*`), and an admin view at `/admin/jobs`.
 
 ---
 
@@ -195,18 +223,22 @@ becoming links; and every item preserves its source name, original timestamp, an
 canonical URL with clear outbound access. No internal hashes, DB errors, admin
 metadata, or secrets are exposed publicly.
 
-The Stage 3 ingestion pipeline and Stage 4 admin are unchanged:
+The ingestion pipeline dispatches on source type at acquisition, then shares one
+downstream path (Stage 9B):
 
 ```text
-Source → fetch → parse → normalize → canonicalize URL
-       → exact deduplication → Article persistence → SourceFetch audit
-       → Source health
+Source → acquire (RSS/Atom | GitHub Releases | Hacker News)
+       → normalize → canonicalize URL
+       → exact deduplication → Article persistence / in-place refresh
+       → SourceFetch audit → Source health
 ```
 
 The following remain **intentionally not implemented yet** and must not be added
 without moving to the appropriate roadmap stage:
 
-- GitHub / Hacker News / RSSHub-specific ingestion; arbitrary scraping
+- RSSHub-specific ingestion; arbitrary scraping; GitHub tracking beyond Releases
+  (star velocity, changelog intelligence, Tool profiles, Release Watch, domain
+  GitHub Trending)
 - AI **summaries** / editorial Story copy; automatic promotion of AI output into
   canonical Story/editorial fields
 - **automated AI translation** (Stage 5B localisation is manual/editorial +
@@ -298,6 +330,10 @@ directly.
 - **Story clustering (Stage 7)** uses `EMBEDDING_PROVIDER` — only the
   deterministic `fake` provider today (offline, no key). Unset defaults to `fake`,
   so clustering needs no live embeddings API and nothing else is affected.
+- **GitHub Releases (Stage 9B)** optionally use a server-only `GITHUB_TOKEN` to
+  raise the GitHub API rate limit above the anonymous ceiling. Unset means
+  unauthenticated requests. The token is never exposed to the browser, stored in
+  a Source's `source_config`, or logged.
 
 ## Database
 
@@ -373,16 +409,37 @@ npm run ingest -- --all                # ingest every enabled Source
 ```
 
 The pipeline (`src/ingestion`) fetches safely (timeout, bounded redirects,
-conditional requests, response-size cap, SSRF protection), parses RSS/Atom into
-one canonical item shape, canonicalizes and hashes item URLs for exact
-deduplication, persists Articles through the repository layer, records every
-attempt in `source_fetches`, and updates each Source's health. External feeds are
-treated as untrusted input throughout.
+conditional requests, response-size cap, SSRF protection), acquires items from
+the Source's protocol, maps them into one canonical item shape, canonicalizes and
+hashes item URLs for exact deduplication, persists (or refreshes) Articles through
+the repository layer, records every attempt in `source_fetches`, and updates each
+Source's health. External feeds, APIs, and URLs are treated as untrusted input
+throughout.
 
-Feed-behaviour edge cases (redirect/tracking URLs, malformed feeds, timeouts,
-SSRF) are covered by stored fixtures in `tests/ingestion`. Optional live
-validation of the representative registry feeds is opt-in and kept out of normal
-CI:
+### Source types (Stage 9B)
+
+Acquisition dispatches on `source_type`; everything downstream is shared:
+
+- **RSS / ATOM** — a feed URL (`feed_url`) parsed into canonical items.
+- **GITHUB** — GitHub Releases via the official REST API. `source_config`:
+  `{ owner, repo, prereleases: exclude|include|only, perPage (1–100), maxPages
+(1–5) }`. Releases only (never commits/issues); drafts excluded; a stable
+  `github:release:{id}` id means an **edited release refreshes in place** rather
+  than duplicating; `html_url` is the canonical target. Set the optional
+  server-only `GITHUB_TOKEN` to raise the API rate limit — it is never stored in
+  `source_config` or logged.
+- **HACKER_NEWS** — the official Firebase API. `source_config`:
+  `{ mode: top|best|new|ids, maxItems (1–200), ids }`. Story items only; comments,
+  deleted/dead, and malformed items are excluded; a text-only Ask HN uses its HN
+  discussion URL. Score/comment counts are volatile and never influence ranking.
+  Per-item fetch failures downgrade a run to `PARTIAL`, or `FAILED` when every
+  requested item fails — never a healthy `SUCCESS` with zero items.
+
+GitHub Releases and Hacker News are deterministically validated with stored JSON
+fixtures in `tests/ingestion`; no required test performs a live GitHub/HN call. A
+mixed-source RSS + GitHub + HN run is covered end-to-end against real Postgres
+(`tests/ingestion/mixed-source.integration.test.ts`). Optional live validation of
+the representative RSS/Atom registry feeds is opt-in and kept out of normal CI:
 
 ```bash
 INGEST_LIVE_SMOKE=1 npx vitest run tests/ingestion/live-smoke.test.ts

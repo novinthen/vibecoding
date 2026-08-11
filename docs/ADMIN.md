@@ -11,14 +11,18 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Sources** (`/admin/sources`): list, inspect, create, edit permitted fields,
   enable/disable, inspect health / consecutive failures / last success /
   conditional-fetch (ETag / Last-Modified) state, and **manually trigger
-  ingestion** for one Source through the existing Stage 3 engine. A Source's
-  **Adapter config (JSON)** field (Stage 9B) holds per-type acquisition settings
-  — GitHub Releases require `{ "owner", "repo" }` (optional `prereleases`,
-  `perPage`, `maxPages`); Hacker News accepts `{ "mode": "top|best|new|ids" }`
-  (with `maxItems`, and `ids` when `mode` is `ids`); RSS/Atom leave it blank. The
-  config is validated for the Source's type on save. **Secrets are never stored
-  here** — a GitHub token is server-only environment configuration
-  (`GITHUB_TOKEN`), never persisted on the Source and never logged.
+  ingestion** for one Source through the existing Stage 3 engine. The Source form
+  shows **source-type-specific acquisition controls** (Stage 9B) that appear only
+  for the relevant type: GitHub Releases (owner, repository, prerelease policy,
+  per-page, max pages); Hacker News (mode top/best/new/ids, max items, and an IDs
+  field shown only in `ids` mode); RSS/Atom show no adapter controls. The Source
+  type is immutable on edit. All input is validated **server-side** for the
+  Source's type before any write (owner/repo bounds, mode/enum/pagination
+  limits) — the form is only an input surface. **Secrets are never entered or
+  stored here** — a GitHub token is server-only environment configuration
+  (`GITHUB_TOKEN`), never persisted on the Source and never sent to the browser.
+  When a token is configured, the GitHub section shows a read-only
+  "authentication configured" indicator (never the value).
 - **Fetches** (`/admin/fetches`): recent `SourceFetch` attempts across all
   Sources with status filtering, HTTP/result info, counts, and error codes.
 - **Articles** (`/admin/articles`): search/filter by Source, status, and
