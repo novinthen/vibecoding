@@ -133,44 +133,4 @@ export class AdminRankingService {
   ): Promise<StoryRankingRow[]> {
     return this.rankingRepo.listRecent(limit, publicationId);
   }
-
-  /**
-   * Batch-rank multiple Stories. Authorized operation (ADMIN/EDITOR only).
-   * Returns successful rankings; logs failures but continues.
-   */
-  async batchRankStories(
-    session: AdminSession,
-    storyIds: string[],
-    publicationId: string | null,
-  ): Promise<{ successful: number; failed: number; rankings: StoryRankingRow[] }> {
-    // Structural authorization check
-    if (session.role === 'VIEWER') {
-      throw new Error('VIEWER role cannot trigger ranking');
-    }
-
-    const rankings = await this.rankingEngine.rankStories(storyIds, publicationId);
-
-    // Audit the batch operation
-    await withTransaction(async (tx) => {
-      await new AdminAuditLogRepository(tx).record({
-        actorIdentifier: session.username,
-        actorId: null,
-        action: 'STORY_RANKING_BATCH',
-        targetType: 'story',
-        targetId: null,
-        metadata: {
-          publicationId,
-          storyCount: storyIds.length,
-          successfulCount: rankings.length,
-          failedCount: storyIds.length - rankings.length,
-        },
-      });
-    });
-
-    return {
-      successful: rankings.length,
-      failed: storyIds.length - rankings.length,
-      rankings,
-    };
-  }
 }
