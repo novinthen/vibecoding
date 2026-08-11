@@ -23,7 +23,12 @@
     "db:validate": "tsx src/db/validate.ts",
     "db:setup": "npm run db:migrate && npm run db:seed && npm run db:validate",
     "ingest": "tsx scripts/ingest.ts",
-    "admin:hash": "tsx scripts/admin-hash.ts"
+    "admin:hash": "tsx scripts/admin-hash.ts",
+    "jobs:ingest": "tsx scripts/run-job.ts ingest",
+    "jobs:enrich": "tsx scripts/run-job.ts enrich",
+    "jobs:cluster": "tsx scripts/run-job.ts cluster",
+    "jobs:rank": "tsx scripts/run-job.ts rank",
+    "jobs:pipeline": "tsx scripts/run-job.ts pipeline"
   },
   "dependencies": {
     "fast-xml-parser": "^5.10.1",

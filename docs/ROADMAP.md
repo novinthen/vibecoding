@@ -235,9 +235,28 @@ Ranking must remain inspectable.
 
 ## Stage 9 — Developer Intelligence
 
-Goal:
+**Status:** Stage 9A COMPLETE, Stage 9B NOT STARTED
 
-Create the product's strongest differentiation.
+### Stage 9A — Production Automation & Scheduling (COMPLETE)
+
+Goal: Make the existing pipeline capable of running safely and repeatedly in production without manual intervention.
+
+Deliverables:
+- bounded, idempotent job orchestration (ingestion, enrichment, clustering, ranking, pipeline);
+- session-correct PostgreSQL advisory locks (dedicated PoolClient);
+- job persistence and observability (`job_runs` table, `/admin/jobs` page);
+- CLI interface (`npm run jobs:*`);
+- finite default batch limits (ingestion: 50, enrichment: 100, clustering: 50, ranking: 100);
+- pipeline stage locks (standalone job cannot overlap pipeline stage);
+- dependency ordering (pipeline stops if required stage lock is held);
+- external scheduler ready (cron/Vercel Cron/GitHub Actions);
+- comprehensive operations guide (`docs/OPERATIONS.md`).
+
+Reference: `docs/CURRENT_STAGE.md`, `docs/OPERATIONS.md`
+
+### Stage 9B — Developer Intelligence (NOT YET APPROVED)
+
+Goal: Create the product's strongest differentiation.
 
 Expected work:
 

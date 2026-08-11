@@ -1,173 +1,172 @@
 # Current Stage
 
-# Stage 8 — Ranking, Trending & Editorial Prioritisation
+# Stage 9A — Production Automation & Scheduling
 
 ## Status
 
-**COMPLETE**
+**COMPLETE** (with final corrections)
 
-Stage 8 is now complete.
+Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5 (Public Portal), Stage 5B (Multi-Publication Localisation), Stage 6 (AI Intelligence), Stage 7 (Story Clustering & Canonical Intelligence), Stage 8 (Ranking, Trending & Editorial Prioritisation), and Stage 9A (Production Automation & Scheduling) are complete.
 
-Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5
-(Public Portal), Stage 5B (Multi-Publication Localisation), Stage 6 (AI
-Intelligence), Stage 7 (Story Clustering & Canonical Intelligence), and Stage 8
-(Ranking, Trending & Editorial Prioritisation) are complete.
-
-Do not begin Stage 9 (Developer Intelligence), automated publishing, GitHub
-ingestion, or Hacker News ingestion without explicit approval.
+Do not begin Stage 9B (Developer Intelligence) without explicit approval.
 
 ---
 
 # Goal
 
-Build a transparent, versioned ranking and editorial-prioritisation layer for
-already-formed Stories. Ranking answers "Which Stories matter most right now?"
-while clustering (Stage 7) answers "Are these Articles about the same event?"
+Make the existing pipeline capable of running safely and repeatedly in production without manual intervention. Build a job orchestration layer that processes Sources, enriches Articles, clusters Stories, and ranks them — all automatically, bounded, and observable.
 
 ```
-Story (canonical)
-  → derive ranking signals (freshness, source diversity, authority, activity, novelty, AI importance)
-  → calculate deterministic score (versioned formula)
-  → persist ranking evidence (versioned, append-only)
-  → publication-aware editorial adjustment (featured, boost, suppress)
-  → public ordering (top stories, topic pages)
+scheduled trigger
+  → bounded ingestion
+  → bounded enrichment
+  → bounded clustering
+  → bounded ranking
+  → health/audit/reporting
+  → next scheduled run
 ```
 
-## Core invariant
+## Core invariants
 
-**Ranking NEVER alters Story membership.** Ranking is a separate layer that
-scores existing Stories. It never clusters, merges, splits, attaches, or
-detaches Articles. It never modifies Article source facts. It never
-auto-publishes Stories.
+1. **Automation NEVER auto-publishes.** PublicationStory remains the publishing boundary.
+2. **Session-correct locking.** Lock acquire/release use dedicated PoolClient (same PostgreSQL session).
+3. **Bounded execution.** All jobs have finite default batch limits.
+4. **Dependency ordering.** Pipeline STOPS if required stage lock is held.
+5. **No transactions span network/AI calls.** Short transactions for persistence only.
+
+---
+
+# Final Corrections Applied
+
+## 1. Pipeline Dependency Ordering (Critical Fix)
+
+**Problem:** Pipeline continued when a required stage was SKIPPED (lock held), violating dependency ordering.
+
+**Example failure:**
+- standalone ingestion running
+- pipeline starts
+- pipeline ingestion SKIPPED (lock held)
+- pipeline enrichment starts IMMEDIATELY ❌
+- standalone ingestion still creating Articles
+- enrichment misses those Articles (dependency race)
+
+**Fix:** Pipeline now STOPS when a required stage lock is held:
+- Stage SKIPPED → record child job_run, STOP pipeline
+- Downstream stages DO NOT execute
+- Parent pipeline reports PARTIAL/FAILED (not SUCCEEDED)
+
+**Validated:** Integration tests prove pipeline stops, downstream stages don't execute, metadata identifies lock contention.
+
+## 2. Advisory Lock Release Hardening
+
+**Problem:** If `pg_advisory_unlock` throws while session remains alive, returning client to pool could leak the lock.
+
+**Fix:** Lock release now destroys failed connections:
+```typescript
+try {
+  await client.query('SELECT pg_advisory_unlock(...)');
+  client.release(); // Normal return
+} catch (error) {
+  client.release(error); // Destroy connection (lock may still be held)
+  throw error;
+}
+```
+
+**Invariant:** A connection whose unlock could not be confirmed is never returned to the reusable pool.
+
+## 3. Job-Level Skip Counter Semantics
+
+**Problem:** Lock-refused job had `skipped = 0` even though the job itself was skipped.
+
+**Fix:** When `status = 'SKIPPED'`, the `skipped` counter is now 1 (the job itself was skipped).
 
 ---
 
 # Implemented
 
-1. **Ranking schema & provenance** — migration `0016` adds `story_rankings`
-   table (versioned, append-only) and `suppress_ranking` column to
-   `publication_stories` for editorial exclusion from ranked lists.
+1. **Job orchestration** (`src/jobs/job-runner.ts`) — common lifecycle for all jobs: lock acquisition (dedicated PoolClient), run persistence, execution, completion, lock release. Every run creates exactly one `job_runs` row (even on lock refusal).
 
-2. **Ranking service** (`src/ranking/ranking-service.ts`) — pure, deterministic
-   formulas for 6 signals (freshness, source diversity, source authority, story
-   activity, novelty, AI importance) combined via weighted sum + editorial
-   adjustment. Formula version `ranking-score-v1` with explicit weights.
+2. **Session-correct advisory locks** (`src/jobs/locking.ts`) — PostgreSQL-native overlap prevention using dedicated `PoolClient` for entire lock lifetime. Lock acquire and release guaranteed to use same session. Failed unlock destroys connection.
 
-3. **Ranking engine** (`src/ranking/ranking-engine.ts`) — orchestration layer
-   that gathers data from multiple repositories, calls the pure ranking service,
-   and persists results. Supports caching (reuses recent ranking < 1 hour) and
-   force recalculation.
+3. **Job persistence** (migration `0017`) — `job_runs` table stores structured summaries: status (RUNNING/SUCCEEDED/PARTIAL/FAILED/SKIPPED), timing, counts, error summary, metadata. Supports operational queries: currently running, last success, overlap attempts.
 
-4. **Ranking repository** (`src/domain/repositories/story-ranking-repository.ts`)
-   — data access for rankings (create, find latest, list history, list top
-   ranked Story IDs). Supports publication-aware queries with correct precedence:
-   publication-specific ranking wins over canonical.
+4. **Ingestion job** (`src/jobs/ingestion-job.ts`) — processes enabled Sources (respects health, default batch: 50), isolates per-Source failures, reuses Stage 3 ingestion unchanged.
 
-5. **Admin service** (`src/admin/ranking-admin-service.ts`) — authorized,
-   audited ranking operations: trigger ranking, view history, batch rank
-   Stories. All operations logged to `admin_audit_log`.
+5. **Enrichment job** (`src/jobs/enrichment-job.ts`) — processes Articles without current enrichment, eligibility-gated (has text, not HIDDEN/DUPLICATE), default batch: 100, reuses Stage 6 enrichment service unchanged.
 
-6. **Admin UI** (`src/app/admin/(dashboard)/stories/[id]/`) — ranking card on
-   Story detail page shows current score, signal breakdown, version, timestamp,
-   history (collapsible), and manual trigger button (authorized, audited).
+6. **Clustering job** (`src/jobs/clustering-job.ts`) — processes unclustered Articles, default batch: 50, respects REVIEWED/LOCKED Story protection, reuses Stage 7 clustering engine unchanged.
 
-7. **Public queries** (`src/ranking/public-ranking-queries.ts`) — ranked Story
-   list queries for public portal. Joins with latest rankings, applies correct
-   precedence (publication-specific wins), orders by score, excludes suppressed
-   Stories.
+7. **Ranking job** (`src/jobs/ranking-job.ts`) — processes ACTIVE Stories, skips recent rankings (< 1 hour unless forced), default batch: 100, reuses Stage 8 ranking engine unchanged.
 
-8. **Public routes** — `/top` route displays top-ranked published Stories using
-   `listPublishedStoriesRanked()`. Respects PublicationStory settings, excludes
-   suppressed Stories. `/latest` remains chronological (unchanged).
+8. **Pipeline job** (`src/jobs/pipeline-job.ts`) — orchestrates full sequence: ingest → enrich → cluster → rank. Each stage runs through `runJob()` with its own lock. Pipeline STOPS if required stage lock is held (dependency ordering).
 
-9. **Tests** — 40 unit tests for ranking formulas (all passing), 9 integration
-   tests covering all Stage 8 requirements (ranking persistence, precedence,
-   isolation, suppression, invariants, concurrency). Full regression test suite
-   (327 tests passing). TypeScript check passes, production build succeeds.
+9. **CLI runner** (`scripts/run-job.ts`) — command-line interface for all jobs: `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`. Each prints outcome summary, exits with appropriate code.
 
-10. **Documentation** — README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE
-    updated with Stage 8 sections. Implementation plans and technical summaries
-    in `docs/STAGE_8_*.md`.
+10. **Admin visibility** (`/admin/jobs`) — shows recent 50 job runs with status, timing, results, errors. Read-only for all admin roles.
+
+11. **Integration tests** — 17 tests across 4 suites (locking, job-runner, pipeline, pipeline-correctness). All DB-gated, all pass.
+
+12. **Documentation** — comprehensive operations guide (`docs/OPERATIONS.md`), updated ARCHITECTURE.MD, DATA_MODEL.md, ADMIN.md, ROADMAP.md, README.md.
+
+Reuses Stage 3/6/7/8 engines unchanged (no business logic duplication).
 
 ---
 
-# Ranking Formula v1
+# Job Invariants
 
-```
-score = (freshness × 0.30) +
-        (sourceDiversity × 0.15) +
-        (sourceAuthority × 0.15) +
-        (storyActivity × 0.15) +
-        (novelty × 0.10) +
-        (aiImportance × 0.15) +
-        editorialAdjustment
-```
+All jobs maintain these guarantees:
 
-**Signals:**
-- **Freshness** — exponential decay from `Story.last_activity_at` (half-life: 24h)
-- **Source Diversity** — distinct Source count / 10 (capped at 1.0)
-- **Source Authority** — weighted average by tier (PRIMARY=1.0 ... DISCOVERY=0.2)
-- **Story Activity** — recent Article count in 7-day window / 10
-- **Novelty** — exponential decay from `Story.created_at` (half-life: 72h)
-- **AI Importance** — max `importance_score` from Stage 6 enrichments (graceful fallback)
-
-**Editorial Adjustment:**
-- Featured: +0.5
-- Priority: `editorial_priority × 0.1`
-- Suppressed: -1000 (excludes from ranked lists)
-
-All signals normalized to [0, 1]; formula is deterministic (same inputs → same output).
-
----
-
-# Important Invariants
-
-- Ranking **never** mutates Article source facts, publishes, or alters Story
-  membership.
-- Ranking is **advisory and explainable** — every score component is recorded.
-- Rankings are **versioned and append-only** — history is preserved.
-- **Publication-aware** — same Story may have different rankings per Publication.
-- **Precedence correct** — latest publication-specific ranking wins over canonical.
-  A newer canonical ranking does NOT override an older publication-specific ranking.
-- **Editorial overrides** are explicit and auditable (applied once in formula, not
-  double-counted in SQL).
-- Unpublished Stories **never** appear in public ranked lists.
-- Ranking is **optional** — public rendering works without rankings (graceful fallback).
+1. **Bounded execution** — finite default batch limits enforced
+2. **Idempotent** — re-running is safe (skips already-current items)
+3. **Isolated failures** — one bad item does not crash entire batch
+4. **No auto-publishing** — jobs enrich/cluster/rank but never publish Stories
+5. **Article provenance preserved** — jobs never overwrite Article source facts
+6. **Short transactions** — no DB locks held across network/AI calls
+7. **Overlapping runs prevented** — advisory locks serialize same-job runs
+8. **Observable** — every run persists outcome to `job_runs` (including SKIPPED)
+9. **REVIEWED/LOCKED protection** — clustering never auto-modifies protected Stories
+10. **Editorial override remains** — admin can operate manually if automation disabled
+11. **Session-correct locks** — dedicated PoolClient for entire lock lifetime
+12. **Dependency ordering** — pipeline stops if required stage lock is held
 
 ---
 
 # Exit Criteria
 
-Stage 8 is complete when:
+Stage 9A is complete when:
 
-- ✅ the ranking schema supports versioned, provenanced ranking with publication-awareness
-- ✅ deterministic ranking formula is implemented and tested
-- ✅ all signals (freshness, source diversity, authority, activity, novelty, AI importance) are defined and tested
-- ✅ editorial prioritization works per Publication
-- ✅ precedence is correct (publication-specific wins over canonical)
-- ✅ no double-counting (editorial adjustment applied once in formula)
-- ✅ admin can trigger ranking and view provenance
-- ✅ admin UI shows ranking card on Story detail
-- ✅ public portal uses ranking for Story ordering (where appropriate)
-- ✅ /top route displays ranked Stories
-- ✅ all tests pass (unit, integration, regressions)
+- ✅ job orchestration layer implemented (runner, locking, persistence)
+- ✅ all four job types implemented (ingestion, enrichment, clustering, ranking)
+- ✅ pipeline orchestrator implemented (coordinated sequence with stage locks)
+- ✅ session-correct advisory locks (dedicated PoolClient)
+- ✅ advisory lock release hardening (failed unlock destroys connection)
+- ✅ pipeline dependency ordering (stops if required stage lock held)
+- ✅ job_runs table stores structured summaries
+- ✅ CLI commands for all jobs
+- ✅ jobs are bounded (finite default batch limits)
+- ✅ jobs are idempotent (safe to re-run)
+- ✅ per-item failures isolated (one bad item doesn't crash batch)
+- ✅ no auto-publishing anywhere
+- ✅ Article source facts never mutated by automation
+- ✅ REVIEWED/LOCKED Story protection respected
+- ✅ admin job visibility (/admin/jobs page)
+- ✅ integration tests pass (17 tests, 4 suites, all DB-gated)
+- ✅ typecheck passes
+- ✅ lint passes
 - ✅ build succeeds
-- ✅ documentation updated (README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE)
-- ✅ no invariants violated (no clustering changes, no auto-publish, no Article mutations)
+- ✅ documentation updated (README, ARCHITECTURE, DATA_MODEL, ADMIN, ROADMAP, OPERATIONS)
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 9 (Developer Intelligence), automated publishing, GitHub
-ingestion, or Hacker News ingestion without explicit approval. Do not merge to
-`main` without review.
+Do not begin Stage 9B (Developer Intelligence) without explicit approval. Do not merge to `main` without review.
 
 ---
 
 # What's Next
 
-**Stage 9 — Developer Intelligence** (NOT YET APPROVED):
+**Stage 9B — Developer Intelligence** (NOT YET APPROVED):
 - GitHub repository tracking
 - Release intelligence
 - Star velocity
@@ -175,4 +174,4 @@ ingestion, or Hacker News ingestion without explicit approval. Do not merge to
 - Hacker News integration
 - Tool profiles
 
-Await explicit approval before beginning Stage 9.
+Await explicit approval before beginning Stage 9B.
