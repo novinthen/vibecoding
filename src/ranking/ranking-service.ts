@@ -16,6 +16,9 @@ import type {
 /**
  * Default ranking configuration v1. Weights and parameters are explicit so
  * formula changes are auditable across versions.
+ *
+ * Note: Featured is NOT numerically boosted here. It remains a separate
+ * editorial tier applied in public ordering (ORDER BY featured DESC).
  */
 export const RANKING_CONFIG_V1: RankingConfig = {
   version: 'ranking-score-v1',
@@ -32,7 +35,7 @@ export const RANKING_CONFIG_V1: RankingConfig = {
   activityWindowHours: 168, // 7 days
   noveltyHalfLifeHours: 72, // 3 days
   editorialPriorityScale: 0.1,
-  featuredBoost: 0.5,
+  featuredBoost: 0, // Featured is a separate ordering tier, not a numeric boost
 };
 
 /**

@@ -1,18 +1,17 @@
 import type { Db } from '@/db/client';
 
-import type { StoryRankingRow } from '@/domain/ranking-types';
-import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repository';
-
 /**
  * Stage 8 — Ranked Story queries for public portal.
  *
- * These methods extend the public content repository to support ranking-based
- * ordering. Stories are ordered by their latest ranking score, with editorial
- * overrides applied per Publication.
+ * These methods provide ranking-based ordering for published Stories.
+ * Ranking scores are complete and final (editorial adjustments already applied).
+ * Public queries do not re-apply editorial adjustments or expose internal ranking metadata.
  */
 
 /**
- * One published Story with its latest ranking for display/sorting.
+ * One published Story with ranking for internal ordering.
+ * Ranking metadata (score, method, version) is for internal use only and should
+ * not be exposed to public users.
  */
 export interface PublishedStoryWithRanking {
   // Story fields
@@ -32,7 +31,7 @@ export interface PublishedStoryWithRanking {
   featured: boolean;
   editorial_priority: number;
   published_at: string | null;
-  // Ranking fields (may be null if no ranking exists yet)
+  // Ranking fields (INTERNAL - do not expose publicly)
   ranking_score: number | null;
   ranking_calculated_at: string | null;
   ranking_method: string | null;
@@ -41,7 +40,19 @@ export interface PublishedStoryWithRanking {
 
 /**
  * Get published Stories ordered by ranking score for a Publication.
- * Applies editorial priority and excludes suppressed Stories.
+ *
+ * Precedence (per Story):
+ * 1. Latest publication-specific ranking (if exists)
+ * 2. Otherwise, latest canonical ranking
+ * 3. Never another Publication's ranking
+ *
+ * Editorial policy:
+ * - calculated_score is the complete final ranking score
+ * - featured is a separate ordering tier (ORDER BY featured DESC)
+ * - No numeric re-application of editorial_priority or featured
+ *
+ * Excludes Stories with suppress_ranking = true.
+ * Only returns PUBLISHED PublicationStories.
  */
 export async function listPublishedStoriesRanked(
   db: Db,
@@ -56,6 +67,10 @@ export async function listPublishedStoriesRanked(
     Omit<PublishedStoryWithRanking, 'ranking_score'> & { ranking_score: string | null }
   >(
     `WITH latest_rankings AS (
+       -- Get latest ranking per Story with correct precedence:
+       -- 1. Latest publication-specific ranking (publication_id = target)
+       -- 2. Otherwise, latest canonical ranking (publication_id IS NULL)
+       -- 3. Never another Publication's ranking
        SELECT DISTINCT ON (story_id)
          story_id,
          calculated_score,
@@ -63,8 +78,10 @@ export async function listPublishedStoriesRanked(
          ranking_method,
          ranking_version
        FROM story_rankings
-       WHERE publication_id = $1 OR (publication_id IS NULL)
-       ORDER BY story_id, calculated_at DESC
+       WHERE publication_id = $1 OR publication_id IS NULL
+       ORDER BY story_id,
+                CASE WHEN publication_id = $1 THEN 0 ELSE 1 END,  -- Pub-specific first
+                calculated_at DESC
      )
      SELECT
        s.id,
@@ -93,8 +110,8 @@ export async function listPublishedStoriesRanked(
        AND ps.status = 'PUBLISHED'
        AND ps.suppress_ranking = false
      ORDER BY
-       COALESCE(r.calculated_score, 0) + (ps.editorial_priority * 0.1) DESC,
        ps.featured DESC,
+       COALESCE(r.calculated_score, 0) DESC,
        s.last_activity_at DESC NULLS LAST
      LIMIT $2 OFFSET $3`,
     [publicationId, capped, clampedOffset],
@@ -108,6 +125,8 @@ export async function listPublishedStoriesRanked(
 
 /**
  * Get published Stories for a Topic, ordered by ranking.
+ *
+ * Same precedence and editorial policy as listPublishedStoriesRanked().
  */
 export async function listPublishedStoriesForTopicRanked(
   db: Db,
@@ -123,6 +142,7 @@ export async function listPublishedStoriesForTopicRanked(
     Omit<PublishedStoryWithRanking, 'ranking_score'> & { ranking_score: string | null }
   >(
     `WITH latest_rankings AS (
+       -- Same precedence as listPublishedStoriesRanked
        SELECT DISTINCT ON (story_id)
          story_id,
          calculated_score,
@@ -130,8 +150,10 @@ export async function listPublishedStoriesForTopicRanked(
          ranking_method,
          ranking_version
        FROM story_rankings
-       WHERE publication_id = $1 OR (publication_id IS NULL)
-       ORDER BY story_id, calculated_at DESC
+       WHERE publication_id = $1 OR publication_id IS NULL
+       ORDER BY story_id,
+                CASE WHEN publication_id = $1 THEN 0 ELSE 1 END,
+                calculated_at DESC
      )
      SELECT
        s.id,
@@ -161,9 +183,8 @@ export async function listPublishedStoriesForTopicRanked(
        AND ps.suppress_ranking = false
        AND s.primary_topic_id = $2
      ORDER BY
-       -- Use ranking score directly (editorial adjustment already applied during calculation)
-       COALESCE(r.calculated_score, 0) DESC,
        ps.featured DESC,
+       COALESCE(r.calculated_score, 0) DESC,
        s.last_activity_at DESC NULLS LAST
      LIMIT $3 OFFSET $4`,
     [publicationId, topicId, capped, clampedOffset],

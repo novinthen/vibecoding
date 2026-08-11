@@ -92,9 +92,9 @@ export async function triggerRankingAction(
   try {
     const rankingService = new AdminRankingService(getPool());
     await rankingService.triggerRanking(
+      actor,
       storyId,
       publicationId,
-      actor.username,
       force,
     );
   } catch (error) {

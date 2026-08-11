@@ -91,11 +91,6 @@ export default async function TopStoriesPage() {
                           Featured
                         </span>
                       )}
-                      {story.ranking_score !== null && (
-                        <span className="font-mono">
-                          score: {story.ranking_score.toFixed(2)}
-                        </span>
-                      )}
                       {story.published_at && (
                         <span>
                           {new Date(story.published_at).toLocaleDateString()}

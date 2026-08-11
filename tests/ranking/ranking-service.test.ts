@@ -365,8 +365,10 @@ describe('Ranking Service — Pure Formulas', () => {
 
       const result = calculateStoryRanking(input);
 
-      expect(result.signals.editorialAdjustment).toBeCloseTo(1.0, 2); // 0.5 + 5*0.1
-      expect(result.score).toBeGreaterThan(1.0); // base score + adjustment
+      // Featured is NOT a numeric boost (featuredBoost = 0)
+      // Only editorial priority is applied: 5 * 0.1 = 0.5
+      expect(result.signals.editorialAdjustment).toBeCloseTo(0.5, 2);
+      expect(result.score).toBeGreaterThan(0.5); // base score + adjustment
     });
 
     it('handles missing AI enrichment gracefully', () => {
