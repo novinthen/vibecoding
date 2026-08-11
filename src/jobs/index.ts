@@ -7,7 +7,7 @@
  */
 
 export { runJob, buildJobResult } from './job-runner';
-export { tryAcquireJobLock, releaseJobLock } from './locking';
+export { tryAcquireJobLock, type JobLock } from './locking';
 export { JobRunRepository } from './job-run-repository';
 export { runIngestionJob, type IngestionJobOptions } from './ingestion-job';
 export { runEnrichmentJob, type EnrichmentJobOptions } from './enrichment-job';
@@ -19,5 +19,4 @@ export type {
   JobResult,
   JobOutcome,
   ItemFailure,
-  JobLockResult,
 } from './types';

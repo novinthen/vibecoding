@@ -17,7 +17,7 @@ import type { Pool } from 'pg';
 import { getPool } from '@/db/client';
 
 import { JobRunRepository } from './job-run-repository';
-import { releaseJobLock, tryAcquireJobLock } from './locking';
+import { tryAcquireJobLock, type JobLock } from './locking';
 import type { JobOutcome, JobResult, JobStatus } from './types';
 
 export interface RunJobOptions {
@@ -44,16 +44,31 @@ export async function runJob(
   const startedAt = new Date();
 
   // Attempt lock acquisition (unless skipLock is true).
-  let lockAcquired = false;
+  let lock: JobLock | null = null;
   if (!options.skipLock) {
-    const lockResult = await tryAcquireJobLock(pool, jobName);
-    if (!lockResult.acquired) {
-      // Job is already running; return a FAILED outcome without persisting.
+    lock = await tryAcquireJobLock(pool, jobName);
+    if (!lock) {
+      // Job is already running; persist a SKIPPED job_run for observability.
+      const jobRunRepo = new JobRunRepository(pool);
+      const skippedRow = await jobRunRepo.createJobRun({ jobName, startedAt });
+      await jobRunRepo.completeJobRun(skippedRow.id, {
+        status: 'SKIPPED',
+        finishedAt: new Date(),
+        durationMs: 0,
+        attempted: 0,
+        succeeded: 0,
+        skipped: 0,
+        failed: 0,
+        retryableFailures: 0,
+        errorSummary: `Job '${jobName}' is already running. Skipped to prevent overlap.`,
+        metadata: { reason: 'lock_held' },
+      });
+
       return {
         kind: 'FAILED',
         result: {
           jobName,
-          status: 'FAILED',
+          status: 'SKIPPED',
           startedAt,
           finishedAt: new Date(),
           durationMs: 0,
@@ -63,12 +78,11 @@ export async function runJob(
           failed: 0,
           retryableFailures: 0,
           errorSummary: `Job '${jobName}' is already running. Skipped to prevent overlap.`,
-          metadata: { reason: 'lock_held', heldSince: lockResult.heldSince },
+          metadata: { reason: 'lock_held' },
         },
         reason: 'Job is already running.',
       };
     }
-    lockAcquired = true;
   }
 
   const jobRunRepo = new JobRunRepository(pool);
@@ -134,9 +148,9 @@ export async function runJob(
     };
   } finally {
     // Release the advisory lock (if acquired).
-    if (lockAcquired) {
+    if (lock) {
       try {
-        await releaseJobLock(pool, jobName);
+        await lock.release();
       } catch (err) {
         console.error(`Failed to release lock for job '${jobName}':`, err);
       }

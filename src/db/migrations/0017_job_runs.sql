@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS job_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   job_name TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED')),
+  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED', 'SKIPPED')),
   started_at TIMESTAMPTZ NOT NULL,
   finished_at TIMESTAMPTZ,
   duration_ms INTEGER,
@@ -33,7 +33,7 @@ CREATE INDEX idx_job_runs_started_at_desc ON job_runs (started_at DESC);
 
 COMMENT ON TABLE job_runs IS 'Stage 9A: Append-only log of automated job executions for observability and operational history.';
 COMMENT ON COLUMN job_runs.job_name IS 'Job identifier (ingest, enrich, cluster, rank, pipeline).';
-COMMENT ON COLUMN job_runs.status IS 'Final outcome: RUNNING (in-progress), SUCCEEDED (all items ok), PARTIAL (some failed), FAILED (systemic).';
+COMMENT ON COLUMN job_runs.status IS 'Final outcome: RUNNING (in-progress), SUCCEEDED (all items ok), PARTIAL (some failed), FAILED (systemic), SKIPPED (overlap prevented).';
 COMMENT ON COLUMN job_runs.attempted IS 'Total items attempted (Sources, Articles, Stories).';
 COMMENT ON COLUMN job_runs.succeeded IS 'Items successfully processed.';
 COMMENT ON COLUMN job_runs.skipped IS 'Items skipped (already current, ineligible, locked).';

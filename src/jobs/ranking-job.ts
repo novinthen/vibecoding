@@ -21,7 +21,7 @@ export interface RankingJobOptions {
   batchLimit?: number;
   /** Force re-ranking even if recent ranking exists. */
   force?: boolean;
-  /** Specific Story IDs to process (overrides filters). */
+  /** Specific Story IDs to process (overrides filters, max 200). */
   storyIds?: string[];
   /** Publication ID for publication-specific ranking (default: canonical). */
   publicationId?: string | null;
@@ -29,6 +29,7 @@ export interface RankingJobOptions {
 
 const JOB_NAME = 'rank';
 const DEFAULT_BATCH_LIMIT = 100;
+const MAX_EXPLICIT_IDS = 200;
 
 /**
  * Run the bounded ranking job. Processes Stories that need ranking (no recent
@@ -51,8 +52,10 @@ export async function runRankingJob(
   let stories;
   if (options.storyIds && options.storyIds.length > 0) {
     // Explicit story IDs (admin manual trigger or targeted run).
+    // Cap to prevent unbounded explicit ID lists.
+    const cappedIds = options.storyIds.slice(0, MAX_EXPLICIT_IDS);
     stories = await Promise.all(
-      options.storyIds.map((id) => storyRepo.findById(id)),
+      cappedIds.map((id) => storyRepo.findById(id)),
     );
     stories = stories.filter((s) => s !== null);
   } else {

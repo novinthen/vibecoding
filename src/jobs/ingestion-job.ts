@@ -19,15 +19,17 @@ import { buildJobResult } from './job-runner';
 import type { ItemFailure, JobOutcome } from './types';
 
 export interface IngestionJobOptions {
-  /** Maximum number of Sources to process in one run (default: no limit). */
+  /** Maximum number of Sources to process in one run (default: 50). */
   batchLimit?: number;
   /** Minimum health threshold (default: include HEALTHY, DEGRADED, UNKNOWN). */
   minHealth?: 'HEALTHY' | 'DEGRADED' | 'UNKNOWN';
-  /** Specific Source IDs to process (overrides enabled/health filters). */
+  /** Specific Source IDs to process (overrides enabled/health filters, max 100). */
   sourceIds?: string[];
 }
 
 const JOB_NAME = 'ingest';
+const DEFAULT_BATCH_LIMIT = 50;
+const MAX_EXPLICIT_IDS = 100;
 
 /**
  * Run the bounded ingestion job. Processes enabled Sources (respecting health
@@ -51,8 +53,10 @@ export async function runIngestionJob(
   let sources;
   if (options.sourceIds && options.sourceIds.length > 0) {
     // Explicit source IDs (admin manual trigger or targeted run).
+    // Cap to prevent unbounded explicit ID lists.
+    const cappedIds = options.sourceIds.slice(0, MAX_EXPLICIT_IDS);
     sources = await Promise.all(
-      options.sourceIds.map((id) => sourceRepo.findById(id)),
+      cappedIds.map((id) => sourceRepo.findById(id)),
     );
     sources = sources.filter((s) => s !== null);
   } else {
@@ -78,10 +82,9 @@ export async function runIngestionJob(
     });
   }
 
-  // Apply batch limit.
-  if (options.batchLimit && options.batchLimit > 0) {
-    sources = sources.slice(0, options.batchLimit);
-  }
+  // Apply batch limit (always enforce a finite bound).
+  const batchLimit = options.batchLimit ?? DEFAULT_BATCH_LIMIT;
+  sources = sources.slice(0, batchLimit);
 
   const attempted = sources.length;
   let succeeded = 0;
@@ -140,7 +143,7 @@ export async function runIngestionJob(
   const finishedAt = new Date();
   const errorSummary = buildErrorSummary(failures);
   const metadata = {
-    batchLimit: options.batchLimit ?? null,
+    batchLimit,
     minHealth: options.minHealth ?? 'UNKNOWN',
     failures: failures.slice(0, 10), // Keep first 10 for debugging.
   };

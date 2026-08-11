@@ -24,12 +24,13 @@ export interface ClusteringJobOptions {
   batchLimit?: number;
   /** Force re-clustering even if Article is already clustered. */
   force?: boolean;
-  /** Specific Article IDs to process (overrides eligibility filters). */
+  /** Specific Article IDs to process (overrides eligibility filters, max 100). */
   articleIds?: string[];
 }
 
 const JOB_NAME = 'cluster';
 const DEFAULT_BATCH_LIMIT = 50;
+const MAX_EXPLICIT_IDS = 100;
 
 /**
  * Run the bounded clustering job. Processes eligible Articles (not yet
@@ -55,8 +56,10 @@ export async function runClusteringJob(
   let articles;
   if (options.articleIds && options.articleIds.length > 0) {
     // Explicit article IDs (admin manual trigger or targeted run).
+    // Cap to prevent unbounded explicit ID lists.
+    const cappedIds = options.articleIds.slice(0, MAX_EXPLICIT_IDS);
     articles = await Promise.all(
-      options.articleIds.map((id) => articleRepo.findById(id)),
+      cappedIds.map((id) => articleRepo.findById(id)),
     );
     articles = articles.filter((a) => a !== null);
   } else {

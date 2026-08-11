@@ -23,12 +23,13 @@ export interface EnrichmentJobOptions {
   batchLimit?: number;
   /** Force re-enrichment even if current enrichment exists. */
   force?: boolean;
-  /** Specific Article IDs to process (overrides eligibility filters). */
+  /** Specific Article IDs to process (overrides eligibility filters, max 100). */
   articleIds?: string[];
 }
 
 const JOB_NAME = 'enrich';
 const DEFAULT_BATCH_LIMIT = 100;
+const MAX_EXPLICIT_IDS = 100;
 
 /**
  * Run the bounded enrichment job. Processes eligible Articles (unenriched or
@@ -58,8 +59,10 @@ export async function runEnrichmentJob(
   let articles;
   if (options.articleIds && options.articleIds.length > 0) {
     // Explicit article IDs (admin manual trigger or targeted run).
+    // Cap to prevent unbounded explicit ID lists.
+    const cappedIds = options.articleIds.slice(0, MAX_EXPLICIT_IDS);
     articles = await Promise.all(
-      options.articleIds.map((id) => articleRepo.findById(id)),
+      cappedIds.map((id) => articleRepo.findById(id)),
     );
     articles = articles.filter((a) => a !== null);
   } else {

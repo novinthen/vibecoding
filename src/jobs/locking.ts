@@ -1,17 +1,32 @@
 /**
- * Stage 9A — PostgreSQL-native job locking.
+ * Stage 9A — PostgreSQL-native job locking (session-correct).
  *
  * Uses advisory locks to prevent overlapping runs of the same job. Advisory
- * locks are session-scoped and automatically released on connection close or
- * transaction end, so crashed jobs do not leave stale locks.
+ * locks are session-scoped and automatically released on connection close,
+ * so crashed jobs do not leave stale locks.
+ *
+ * CRITICAL: Advisory locks are tied to a PostgreSQL session, not a transaction.
+ * Pool.query() may execute on different sessions, so we MUST acquire a dedicated
+ * PoolClient for the entire lock lifecycle.
  *
  * Each job has a unique integer key derived from its name hash. Unrelated jobs
  * may run concurrently; only the same job name is serialized.
  */
 
-import type { Db } from '@/db/client';
+import type { Pool, PoolClient } from 'pg';
 
-import type { JobLockResult } from './types';
+/**
+ * Job lock handle. Holds the dedicated session that owns the advisory lock.
+ * The caller MUST call release() in a finally block to clean up properly.
+ */
+export interface JobLock {
+  /** The dedicated client holding the lock (do not use for other queries). */
+  readonly client: PoolClient;
+  /** Job name this lock protects. */
+  readonly jobName: string;
+  /** Release the advisory lock and return the client to the pool. */
+  release(): Promise<void>;
+}
 
 /**
  * Job lock namespace. Advisory lock keys are 64-bit integers; we use the high
@@ -20,62 +35,65 @@ import type { JobLockResult } from './types';
 const JOB_LOCK_NAMESPACE = 0x564a4f42; // 'VJOB' in hex
 
 /**
- * Try to acquire an advisory lock for the given job name. Returns immediately
- * (non-blocking). If acquired, the lock is held until the connection is
- * released or an explicit unlock.
+ * Try to acquire a session advisory lock for the given job name. Returns
+ * immediately (non-blocking). If acquired, returns a JobLock handle that holds
+ * a dedicated PoolClient for the lock lifetime. The caller MUST call
+ * lock.release() in a finally block.
  *
  * Advisory locks are session-scoped: they survive COMMIT/ROLLBACK and are
- * released when the connection is returned to the pool or the session ends.
- * A crashed job releases its lock automatically when the connection dies.
+ * released when the session ends (connection closed or returned to pool). A
+ * crashed job releases its lock automatically when the connection dies.
  *
- * @param db - Database connection (must be from a pool, not a transaction).
+ * @param pool - Connection pool to acquire a dedicated client from.
  * @param jobName - Unique job identifier (e.g., 'ingest', 'enrich').
- * @returns Lock result with acquisition status.
+ * @returns JobLock if acquired, null if already held by another session.
  */
 export async function tryAcquireJobLock(
-  db: Db,
+  pool: Pool,
   jobName: string,
-): Promise<JobLockResult> {
+): Promise<JobLock | null> {
   const lockKey = jobNameToLockKey(jobName);
 
-  // pg_try_advisory_lock returns true if acquired, false if already held.
-  const result = await db.query<{ acquired: boolean }>(
-    'SELECT pg_try_advisory_lock($1, $2) AS acquired',
-    [JOB_LOCK_NAMESPACE, lockKey],
-  );
+  // Acquire a dedicated client for the lock lifetime.
+  const client = await pool.connect();
 
-  const acquired = result.rows[0]?.acquired ?? false;
+  try {
+    // pg_try_advisory_lock returns true if acquired, false if already held.
+    const result = await client.query<{ acquired: boolean }>(
+      'SELECT pg_try_advisory_lock($1, $2) AS acquired',
+      [JOB_LOCK_NAMESPACE, lockKey],
+    );
 
-  if (acquired) {
-    return { acquired: true };
+    const acquired = result.rows[0]?.acquired ?? false;
+
+    if (acquired) {
+      // Lock acquired successfully; return handle with release method.
+      return {
+        client,
+        jobName,
+        async release() {
+          try {
+            // Release the advisory lock on the same session.
+            await client.query('SELECT pg_advisory_unlock($1, $2)', [
+              JOB_LOCK_NAMESPACE,
+              lockKey,
+            ]);
+          } finally {
+            // Always return the client to the pool, even if unlock fails.
+            client.release();
+          }
+        },
+      };
+    } else {
+      // Lock not acquired; release the client immediately.
+      client.release();
+      return null;
+    }
+  } catch (error) {
+    // Error during lock acquisition; release the client.
+    client.release();
+    throw error;
   }
-
-  // Lock not acquired; return diagnostic info (lock is held by another session).
-  // We cannot reliably get the holder's start time from advisory locks alone,
-  // so we return a placeholder. Job run persistence will provide full history.
-  return {
-    acquired: false,
-    heldSince: new Date(), // Placeholder; real runs are in job_runs table.
-  };
-}
-
-/**
- * Release the advisory lock for the given job name. Should be called when the
- * job completes (success or failure). If not called explicitly, the lock is
- * released when the connection is returned to the pool.
- *
- * @param db - Database connection that holds the lock.
- * @param jobName - Job identifier (must match the acquire call).
- */
-export async function releaseJobLock(
-  db: Db,
-  jobName: string,
-): Promise<void> {
-  const lockKey = jobNameToLockKey(jobName);
-  await db.query('SELECT pg_advisory_unlock($1, $2)', [
-    JOB_LOCK_NAMESPACE,
-    lockKey,
-  ]);
 }
 
 /**
