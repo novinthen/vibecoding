@@ -64,18 +64,18 @@ describe.skipIf(skipIfNoDb)('Pipeline integration (DB-gated)', () => {
   });
 
   it('standalone ingest cannot overlap pipeline ingest', async () => {
-    // Start pipeline (doesn't finish immediately due to stages)
+    // Start pipeline with a slow ingestion stage to ensure overlap
     const pipelinePromise = runPipelineJob(pool, {
-      ingestion: { batchLimit: 0 },
+      ingestion: { batchLimit: 1 }, // Process at least 1 source to take time
       enrichment: { batchLimit: 0 },
       clustering: { batchLimit: 0 },
       ranking: { batchLimit: 0 },
     });
 
-    // Small delay to ensure pipeline starts
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Small delay to ensure pipeline acquires ingest lock
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Try standalone ingest while pipeline is running
+    // Try standalone ingest while pipeline ingest stage is running
     const standaloneOutcome = await runJob(
       'ingest',
       async (p) => runIngestionJob(p, { batchLimit: 0 }),
