@@ -1,3 +1,4 @@
+import { resolveGithubToken } from '@/config/env';
 import { TopicRepository } from '@/domain';
 
 import { Card, PageHeader } from '../../../_components/ui';
@@ -30,6 +31,7 @@ export default async function NewSourcePage() {
           mode="create"
           topics={topics.map((topic) => ({ id: topic.id, name: topic.name }))}
           submitLabel="Create Source"
+          githubTokenConfigured={resolveGithubToken() !== null}
         />
       </Card>
     </>

@@ -13,6 +13,12 @@ export interface CreateSourceInput {
   language?: string | null;
   pollInterval?: number | null;
   defaultTopicId?: string | null;
+  /**
+   * Source-type-specific adapter configuration (Stage 9B), already validated and
+   * normalized by {@link import('@/ingestion/source-config').sourceConfigForStorage}.
+   * Defaults to the empty object (RSS/Atom Sources carry no adapter config).
+   */
+  sourceConfig?: Record<string, unknown>;
 }
 
 /**
@@ -44,6 +50,11 @@ export interface UpdateSourceInput {
   language: string | null;
   pollInterval: number | null;
   defaultTopicId: string | null;
+  /**
+   * Replacement adapter configuration (Stage 9B), already validated for the
+   * Source's type. `undefined` leaves the stored config unchanged.
+   */
+  sourceConfig?: Record<string, unknown>;
 }
 
 /** Data access for Sources (publishers / acquisition endpoints). */
@@ -116,7 +127,8 @@ export class SourceRepository {
          feed_url       = $5,
          language       = $6,
          poll_interval  = $7,
-         default_topic_id = $8
+         default_topic_id = $8,
+         source_config  = CASE WHEN $9::boolean THEN $10::jsonb ELSE source_config END
        WHERE id = $1
        RETURNING *`,
       [
@@ -128,6 +140,10 @@ export class SourceRepository {
         input.language,
         input.pollInterval,
         input.defaultTopicId,
+        input.sourceConfig !== undefined,
+        input.sourceConfig !== undefined
+          ? JSON.stringify(input.sourceConfig)
+          : null,
       ],
     );
     return result.rows[0] ?? null;
@@ -159,8 +175,9 @@ export class SourceRepository {
     const result = await this.db.query<SourceRow>(
       `INSERT INTO sources
          (name, slug, source_type, authority_tier,
-          homepage_url, feed_url, language, poll_interval, default_topic_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          homepage_url, feed_url, language, poll_interval, default_topic_id,
+          source_config)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
        RETURNING *`,
       [
         input.name,
@@ -172,6 +189,7 @@ export class SourceRepository {
         input.language ?? null,
         input.pollInterval ?? null,
         input.defaultTopicId ?? null,
+        JSON.stringify(input.sourceConfig ?? {}),
       ],
     );
     // RETURNING * on a single-row INSERT always yields exactly one row.
@@ -187,8 +205,9 @@ export class SourceRepository {
     const result = await this.db.query<SourceRow>(
       `INSERT INTO sources
          (name, slug, source_type, authority_tier,
-          homepage_url, feed_url, language, poll_interval, default_topic_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          homepage_url, feed_url, language, poll_interval, default_topic_id,
+          source_config)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
        ON CONFLICT (slug) DO UPDATE SET
          name           = EXCLUDED.name,
          source_type    = EXCLUDED.source_type,
@@ -196,7 +215,8 @@ export class SourceRepository {
          homepage_url   = EXCLUDED.homepage_url,
          feed_url       = EXCLUDED.feed_url,
          language       = EXCLUDED.language,
-         poll_interval  = EXCLUDED.poll_interval
+         poll_interval  = EXCLUDED.poll_interval,
+         source_config  = EXCLUDED.source_config
        RETURNING *`,
       [
         input.name,
@@ -208,6 +228,7 @@ export class SourceRepository {
         input.language ?? null,
         input.pollInterval ?? null,
         input.defaultTopicId ?? null,
+        JSON.stringify(input.sourceConfig ?? {}),
       ],
     );
     return result.rows[0] as SourceRow;

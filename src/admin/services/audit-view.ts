@@ -31,6 +31,7 @@ export function auditSourceView(row: SourceRow): Record<string, unknown> {
     language: row.language,
     poll_interval: row.poll_interval,
     default_topic_id: row.default_topic_id,
+    source_config: row.source_config,
     enabled: row.enabled,
     health_status: row.health_status,
   };

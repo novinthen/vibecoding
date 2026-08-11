@@ -235,7 +235,7 @@ Ranking must remain inspectable.
 
 ## Stage 9 — Developer Intelligence
 
-**Status:** Stage 9A COMPLETE, Stage 9B NOT STARTED
+**Status:** Stage 9A COMPLETE, Stage 9B COMPLETE (Developer Intelligence Source Expansion — GitHub Releases + Hacker News)
 
 ### Stage 9A — Production Automation & Scheduling (COMPLETE)
 
@@ -254,20 +254,30 @@ Deliverables:
 
 Reference: `docs/CURRENT_STAGE.md`, `docs/OPERATIONS.md`
 
-### Stage 9B — Developer Intelligence (NOT YET APPROVED)
+### Stage 9B — Developer Intelligence Source Expansion (COMPLETE)
 
-Goal: Create the product's strongest differentiation.
+Goal: Expand acquisition to the two highest-value developer-intelligence inputs
+without building new pipelines.
 
-Expected work:
+Delivered:
 
-- GitHub repository tracking;
-- releases;
-- star velocity;
-- changelog intelligence;
-- Hacker News/community signals;
-- Tool profiles;
-- Release Watch;
-- domain-specific GitHub Trending.
+- source-type acquisition/dispatch seam (`src/ingestion/acquire`) reusing the
+  existing NormalizedItem → canonicalization → Article/dedup → SourceFetch/health
+  → enrichment → clustering → ranking → Stage 9A automation flow unchanged;
+- per-source `source_config` (migration `0018`) with per-type Zod validation and
+  admin plumbing;
+- **GitHub Releases** via the official REST API — releases only, bounded
+  pagination, draft exclusion, explicit prerelease policy, stable release id,
+  canonical release URL, bounded excerpt, ETag conditional requests, optional
+  server-only token, 403/429 rate-limit classification;
+- **Hacker News** via the official Firebase API — story items only,
+  comment/deleted/dead/malformed exclusion, `top`/`best`/`new`/explicit ids,
+  external target or HN discussion URL; engagement counts never affect ranking;
+- deterministic fixture/unit tests for both providers, a mixed-source PostgreSQL
+  integration test, and cross-origin token-leak protection in the safe fetcher.
+
+Deferred to later stages (NOT in 9B): star velocity, changelog intelligence,
+Tool profiles, Release Watch, domain-specific GitHub Trending.
 
 ---
 

@@ -1,177 +1,118 @@
 # Current Stage
 
-# Stage 9A — Production Automation & Scheduling
+# Stage 9B — Developer Intelligence Source Expansion
 
 ## Status
 
-**COMPLETE** (with final corrections)
+**COMPLETE**
 
-Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5 (Public Portal), Stage 5B (Multi-Publication Localisation), Stage 6 (AI Intelligence), Stage 7 (Story Clustering & Canonical Intelligence), Stage 8 (Ranking, Trending & Editorial Prioritisation), and Stage 9A (Production Automation & Scheduling) are complete.
+Stages 3–9A are complete. Stage 9B expands acquisition to two new
+developer-intelligence inputs — **GitHub Releases** and **Hacker News** — without
+building any new pipelines.
 
-Do not begin Stage 9B (Developer Intelligence) without explicit approval.
+Do not begin Stage 10 without explicit approval.
 
 ---
 
 # Goal
 
-Make the existing pipeline capable of running safely and repeatedly in production without manual intervention. Build a job orchestration layer that processes Sources, enriches Articles, clusters Stories, and ranks them — all automatically, bounded, and observable.
+Add GitHub Releases and Hacker News as first-class Sources that flow through the
+**existing** ingestion engine. They are new *inputs*, not new *pipelines*:
 
 ```
-scheduled trigger
-  → bounded ingestion
-  → bounded enrichment
-  → bounded clustering
-  → bounded ranking
-  → health/audit/reporting
-  → next scheduled run
+source-specific acquisition (RSS/Atom | GitHub Releases | Hacker News)
+  → existing NormalizedItem
+  → existing canonicalization + hashing
+  → existing Article persistence / exact dedup
+  → existing SourceFetch audit + Source health
+  → existing enrichment
+  → existing clustering
+  → existing ranking
+  → existing Stage 9A automation
 ```
 
 ## Core invariants
 
-1. **Automation NEVER auto-publishes.** PublicationStory remains the publishing boundary.
-2. **Session-correct locking.** Lock acquire/release use dedicated PoolClient (same PostgreSQL session).
-3. **Bounded execution.** All jobs have finite default batch limits.
-4. **Dependency ordering.** Pipeline STOPS if required stage lock is held.
-5. **No transactions span network/AI calls.** Short transactions for persistence only.
-
----
-
-# Final Corrections Applied
-
-## 1. Pipeline Dependency Ordering (Critical Fix)
-
-**Problem:** Pipeline continued when a required stage was SKIPPED (lock held), violating dependency ordering.
-
-**Example failure:**
-- standalone ingestion running
-- pipeline starts
-- pipeline ingestion SKIPPED (lock held)
-- pipeline enrichment starts IMMEDIATELY ❌
-- standalone ingestion still creating Articles
-- enrichment misses those Articles (dependency race)
-
-**Fix:** Pipeline now STOPS when a required stage lock is held:
-- Stage SKIPPED → record child job_run, STOP pipeline
-- Downstream stages DO NOT execute
-- Parent pipeline reports PARTIAL/FAILED (not SUCCEEDED)
-
-**Validated:** Integration tests prove pipeline stops, downstream stages don't execute, metadata identifies lock contention.
-
-## 2. Advisory Lock Release Hardening
-
-**Problem:** If `pg_advisory_unlock` throws while session remains alive, returning client to pool could leak the lock.
-
-**Fix:** Lock release now destroys failed connections:
-```typescript
-try {
-  await client.query('SELECT pg_advisory_unlock(...)');
-  client.release(); // Normal return
-} catch (error) {
-  client.release(error); // Destroy connection (lock may still be held)
-  throw error;
-}
-```
-
-**Invariant:** A connection whose unlock could not be confirmed is never returned to the reusable pool.
-
-## 3. Job-Level Skip Counter Semantics
-
-**Problem:** Lock-refused job had `skipped = 0` even though the job itself was skipped.
-
-**Fix:** When `status = 'SKIPPED'`, the `skipped` counter is now 1 (the job itself was skipped).
+1. **One pipeline.** No separate GitHub/HN Article pipeline. Dispatch happens at
+   acquisition; everything downstream is format-agnostic and shared.
+2. **No auto-publishing.** Acquisition never publishes; PublicationStory remains
+   the publishing boundary.
+3. **Source facts only.** Acquirers write Article source facts (title, url,
+   excerpt, author, timestamps) — never AI-derived data, never engagement.
+4. **Reuse the safe fetcher.** Every provider fetches through the Stage 3 safe
+   fetcher, so SSRF, redirect bounds, timeout, and size caps apply identically.
+5. **Secrets stay server-only.** Provider credentials live in the environment
+   (`GITHUB_TOKEN`), never in `source_config`, never logged.
 
 ---
 
 # Implemented
 
-1. **Job orchestration** (`src/jobs/job-runner.ts`) — common lifecycle for all jobs: lock acquisition (dedicated PoolClient), run persistence, execution, completion, lock release. Every run creates exactly one `job_runs` row (even on lock refusal).
+1. **Source configuration** — `source_config` JSONB column (migration `0018`),
+   per-type Zod validation (`src/ingestion/source-config.ts`), repository
+   persistence (create/upsert/update), and admin plumbing (validation, service,
+   audit view, and an "Adapter config (JSON)" form field).
 
-2. **Session-correct advisory locks** (`src/jobs/locking.ts`) — PostgreSQL-native overlap prevention using dedicated `PoolClient` for entire lock lifetime. Lock acquire and release guaranteed to use same session. Failed unlock destroys connection.
+2. **Acquisition/dispatch seam** (`src/ingestion/acquire`) — `SourceAcquirer`
+   contract producing a canonical `AcquisitionResult`; `ingestSource` dispatches
+   on `source_type`. The RSS/Atom path is factored into `feedAcquirer` with
+   identical behaviour and remains the default for RSS/ATOM/RSSHUB/API/MANUAL.
 
-3. **Job persistence** (migration `0017`) — `job_runs` table stores structured summaries: status (RUNNING/SUCCEEDED/PARTIAL/FAILED/SKIPPED), timing, counts, error summary, metadata. Supports operational queries: currently running, last success, overlap attempts.
+3. **GitHub Releases acquirer** (`github-acquirer.ts`) — official REST API,
+   releases only; validated `owner`/`repo` build the fixed
+   `api.github.com/repos/{owner}/{repo}/releases` endpoint; bounded pagination;
+   draft exclusion; explicit prerelease policy (`exclude`/`include`/`only`);
+   stable `github:release:{id}` external id (edited releases never duplicate);
+   `html_url` canonical target; bounded release-note excerpt; ETag conditional
+   requests; optional server-only Bearer token; 403/429 rate-limit
+   classification.
 
-4. **Ingestion job** (`src/jobs/ingestion-job.ts`) — processes enabled Sources (respects health, default batch: 50), isolates per-Source failures, reuses Stage 3 ingestion unchanged.
+4. **Hacker News acquirer** (`hacker-news-acquirer.ts`) — official Firebase API,
+   story items only; excludes comments, deleted/dead, and malformed items;
+   bounded `top`/`best`/`new`/explicit ids; external target URL where present or
+   the HN discussion URL for text-only Ask HN; stable `hn:item:{id}` external id.
+   Score/comment counts are NOT captured onto the Article and never affect
+   Stage 8 ranking.
 
-5. **Enrichment job** (`src/jobs/enrichment-job.ts`) — processes Articles without current enrichment, eligibility-gated (has text, not HIDDEN/DUPLICATE), default batch: 100, reuses Stage 6 enrichment service unchanged.
+5. **Safe-fetcher hardening** — optional extra request headers (JSON `Accept`,
+   API version, `Authorization`); the `Authorization` header is dropped before a
+   cross-origin redirect so a provider token cannot leak; a small allow-listed
+   set of rate-limit response headers is attached to 4xx/5xx errors for
+   provider-specific classification. RSS/Atom behaviour is unchanged.
 
-6. **Clustering job** (`src/jobs/clustering-job.ts`) — processes unclustered Articles, default batch: 50, respects REVIEWED/LOCKED Story protection, reuses Stage 7 clustering engine unchanged.
+6. **Registry** — one representative GitHub Source (`nextjs-releases`) and one
+   Hacker News Source (`hacker-news-top`), gated (not auto-enabled).
 
-7. **Ranking job** (`src/jobs/ranking-job.ts`) — processes ACTIVE Stories, skips recent rankings (< 1 hour unless forced), default batch: 100, reuses Stage 8 ranking engine unchanged.
-
-8. **Pipeline job** (`src/jobs/pipeline-job.ts`) — orchestrates full sequence: ingest → enrich → cluster → rank. Each stage runs through `runJob()` with its own lock. Pipeline STOPS if required stage lock is held (dependency ordering).
-
-9. **CLI runner** (`scripts/run-job.ts`) — command-line interface for all jobs: `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`. Each prints outcome summary, exits with appropriate code.
-
-10. **Admin visibility** (`/admin/jobs`) — shows recent 50 job runs with status, timing, results, errors. Read-only for all admin roles.
-
-11. **Integration tests** — 17 tests across 4 suites (locking, job-runner, pipeline, pipeline-correctness). All DB-gated, all pass.
-
-12. **Documentation** — comprehensive operations guide (`docs/OPERATIONS.md`), updated ARCHITECTURE.MD, DATA_MODEL.md, ADMIN.md, ROADMAP.md, README.md.
-
-Reuses Stage 3/6/7/8 engines unchanged (no business logic duplication).
-
----
-
-# Job Invariants
-
-All jobs maintain these guarantees:
-
-1. **Bounded execution** — finite default batch limits enforced
-2. **Idempotent** — re-running is safe (skips already-current items)
-3. **Isolated failures** — one bad item does not crash entire batch
-4. **No auto-publishing** — jobs enrich/cluster/rank but never publish Stories
-5. **Article provenance preserved** — jobs never overwrite Article source facts
-6. **Short transactions** — no DB locks held across network/AI calls
-7. **Overlapping runs prevented** — advisory locks serialize same-job runs
-8. **Observable** — every run persists outcome to `job_runs` (including SKIPPED)
-9. **REVIEWED/LOCKED protection** — clustering never auto-modifies protected Stories
-10. **Editorial override remains** — admin can operate manually if automation disabled
-11. **Session-correct locks** — dedicated PoolClient for entire lock lifetime
-12. **Dependency ordering** — pipeline stops if required stage lock is held
+7. **Tests** — deterministic fixture/unit tests for the GitHub and HN acquirers,
+   the fetcher's header/redirect/rate-limit behaviour, an in-memory dispatch
+   test proving GitHub/HN flow through `ingestSource` with dedup and
+   stable-id-on-edit, and a DB-gated mixed-source integration test (RSS + GitHub
+   + HN through one engine, no duplicates, SourceFetch rows present, no
+   auto-publish). No required test performs a live GitHub/HN call.
 
 ---
 
 # Exit Criteria
 
-Stage 9A is complete when:
+Stage 9B is complete when:
 
-- ✅ job orchestration layer implemented (runner, locking, persistence)
-- ✅ all four job types implemented (ingestion, enrichment, clustering, ranking)
-- ✅ pipeline orchestrator implemented (coordinated sequence with stage locks)
-- ✅ session-correct advisory locks (dedicated PoolClient)
-- ✅ advisory lock release hardening (failed unlock destroys connection)
-- ✅ pipeline dependency ordering (stops if required stage lock held)
-- ✅ job_runs table stores structured summaries
-- ✅ CLI commands for all jobs
-- ✅ jobs are bounded (finite default batch limits)
-- ✅ jobs are idempotent (safe to re-run)
-- ✅ per-item failures isolated (one bad item doesn't crash batch)
-- ✅ no auto-publishing anywhere
-- ✅ Article source facts never mutated by automation
-- ✅ REVIEWED/LOCKED Story protection respected
-- ✅ admin job visibility (/admin/jobs page)
-- ✅ integration tests pass (17 tests, 4 suites, all DB-gated)
-- ✅ typecheck passes
-- ✅ lint passes
-- ✅ build succeeds
-- ✅ documentation updated (README, ARCHITECTURE, DATA_MODEL, ADMIN, ROADMAP, OPERATIONS)
+- ✅ `source_config` migration + per-type validation + repository/admin plumbing
+- ✅ acquisition/dispatch seam; RSS/Atom path preserved unchanged
+- ✅ GitHub Releases acquirer meeting all requirements (bounded, draft/prerelease
+  policy, stable id, canonical URL, bounded excerpt, ETag, rate-limit, token)
+- ✅ Hacker News acquirer (story-only, exclusions, url selection, bounded)
+- ✅ no separate GitHub/HN pipeline; downstream stages untouched
+- ✅ no auto-publishing; no Stage 8 ranking change from HN engagement
+- ✅ SSRF/security model preserved; token never leaked or logged
+- ✅ deterministic GitHub + HN tests (no live calls in CI)
+- ✅ mixed-source PostgreSQL integration test
+- ✅ typecheck, lint, format check pass
+- ✅ production build succeeds
+- ✅ documentation updated (ARCHITECTURE, DATA_MODEL, ROADMAP, ADMIN, this file)
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 9B (Developer Intelligence) without explicit approval. Do not merge to `main` without review.
-
----
-
-# What's Next
-
-**Stage 9B — Developer Intelligence** (NOT YET APPROVED):
-- GitHub repository tracking
-- Release intelligence
-- Star velocity
-- Changelog monitoring
-- Hacker News integration
-- Tool profiles
-
-Await explicit approval before beginning Stage 9B.
+Do not begin Stage 10 without explicit approval. Do not merge to `main` without
+review.

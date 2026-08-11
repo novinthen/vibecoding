@@ -84,6 +84,13 @@ const serverSchema = z.object({
    * embeddings API and the rest of the app is unaffected.
    */
   EMBEDDING_PROVIDER: z.enum(['fake']).optional(),
+  /**
+   * Optional server-only GitHub token (Stage 9B) used to authenticate GitHub
+   * REST API requests for Release ingestion. Raises the API rate limit and is
+   * NEVER exposed to the browser, embedded in stored Source config, or logged.
+   * Unset means unauthenticated requests (subject to the lower anonymous limit).
+   */
+  GITHUB_TOKEN: z.string().min(1).optional(),
 });
 
 /**
@@ -164,6 +171,14 @@ export function requireDatabaseUrl(env: AppEnv = appEnv): string {
     );
   }
   return env.DATABASE_URL;
+}
+
+/**
+ * Resolve the optional server-only GitHub token (Stage 9B). Returns null when
+ * unset so GitHub ingestion runs unauthenticated. Never log the return value.
+ */
+export function resolveGithubToken(env: AppEnv = appEnv): string | null {
+  return env.GITHUB_TOKEN ?? null;
 }
 
 /** Admin auth configuration resolved from the environment. */

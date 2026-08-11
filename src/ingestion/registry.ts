@@ -16,6 +16,11 @@ import type { CreateSourceInput } from '@/domain';
  * (INGEST_LIVE_SMOKE=1) and for the CLI `--register` command; they are NOT
  * enabled automatically and should be verified before broad rollout. Do not
  * expand this list broadly until representative validation passes.
+ *
+ * Stage 9B adds two developer-intelligence Sources — one GitHub Releases Source
+ * and one Hacker News Source — to prove the acquisition seam end to end. They
+ * flow through the SAME ingestion engine as the RSS/Atom entries; only their
+ * `sourceType` and `sourceConfig` differ.
  */
 
 export interface RegistrySource extends CreateSourceInput {
@@ -43,5 +48,27 @@ export const REPRESENTATIVE_SOURCES: readonly RegistrySource[] = [
     feedUrl: 'https://simonwillison.net/atom/everything/',
     language: 'en',
     note: 'Recognised developer/AI-coding publication (Atom 1.0 wire format).',
+  },
+  {
+    name: 'Next.js Releases',
+    slug: 'nextjs-releases',
+    sourceType: 'GITHUB',
+    authorityTier: 'TRUSTED',
+    homepageUrl: 'https://github.com/vercel/next.js/releases',
+    feedUrl: null,
+    language: 'en',
+    sourceConfig: { owner: 'vercel', repo: 'next.js', prereleases: 'exclude' },
+    note: 'GitHub Releases for a core web framework (official REST API, stable release ids).',
+  },
+  {
+    name: 'Hacker News (Top)',
+    slug: 'hacker-news-top',
+    sourceType: 'HACKER_NEWS',
+    authorityTier: 'COMMUNITY',
+    homepageUrl: 'https://news.ycombinator.com/',
+    feedUrl: null,
+    language: 'en',
+    sourceConfig: { mode: 'top', maxItems: 50 },
+    note: 'Developer-community signal via the official Firebase API (story items only).',
   },
 ];

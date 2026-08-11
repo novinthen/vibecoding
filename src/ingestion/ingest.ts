@@ -6,15 +6,12 @@ import type {
 } from '@/domain';
 import type { ArticleRow, SourceFetchRow, SourceRow } from '@/domain/types';
 
+import { acquireForSource } from './acquire';
 import { feedAdapter } from './adapters/feed-adapter';
 import type { SourceAdapter } from './adapters/types';
-import {
-  IngestError,
-  type IngestErrorCode,
-  toIngestError,
-} from './http/errors';
+import { type IngestErrorCode, toIngestError } from './http/errors';
 import { fetchFeed as defaultFetchFeed } from './http/fetcher';
-import type { FeedFetchOptions, FeedResponse } from './http/fetcher';
+import type { FeedFetcher, FeedFetchOptions } from './http/fetcher';
 import { deriveHealth } from './health';
 import { CanonicalUrlError } from './normalize/canonical-url';
 import { toArticleInput } from './normalize/normalize';
@@ -35,14 +32,23 @@ import { toArticleInput } from './normalize/normalize';
  *  - every attempt opens and closes exactly one SourceFetch audit row, even on
  *    failure, so a broken Source stays observable;
  *  - a single unusable item is dropped (counted), never aborting the feed;
- *  - insertion is idempotent (createIfAbsent), so re-ingesting the same feed
- *    creates no duplicate Articles;
+ *  - insertion is idempotent (createOrRefresh), so re-ingesting the same feed
+ *    creates no duplicate Articles; an item whose source facts changed refreshes
+ *    the existing Article in place (source facts only), counted as itemsUpdated;
  *  - one Source's failure is fully contained — {@link ingestSources} isolates it.
  */
 
 /** Article persistence surface the orchestrator needs (satisfied by ArticleRepository). */
 export interface ArticleWriter {
-  createIfAbsent(input: CreateArticleInput): Promise<ArticleRow | null>;
+  /**
+   * Insert a new Article, or refresh an existing one's SOURCE FACTS when the
+   * upstream item changed (e.g. an edited GitHub Release under a stable external
+   * id). Only source-supplied columns are written — never editorial state,
+   * AI-derived data, Story membership, or ranking.
+   */
+  createOrRefresh(
+    input: CreateArticleInput,
+  ): Promise<{ row: ArticleRow; outcome: 'created' | 'updated' | 'unchanged' }>;
 }
 
 /** SourceFetch audit surface (satisfied by SourceFetchRepository). */
@@ -56,24 +62,24 @@ export interface SourceHealthWriter {
   updateFetchState(id: string, input: UpdateFetchStateInput): Promise<void>;
 }
 
-/** Feed fetcher seam (satisfied by {@link fetchFeed}). */
-export type FeedFetcher = (
-  url: string,
-  options: FeedFetchOptions,
-) => Promise<FeedResponse>;
-
 export interface IngestDeps {
   articles: ArticleWriter;
   sourceFetches: SourceFetchWriter;
   sources: SourceHealthWriter;
   /** Defaults to the real safe HTTP fetcher. */
   fetchFeed?: FeedFetcher;
-  /** Defaults to the RSS/Atom adapter. */
+  /** Defaults to the RSS/Atom adapter (used only by the feed acquirer). */
   adapter?: SourceAdapter;
   /** Clock seam for deterministic timing in tests. */
   now?: () => Date;
   /** Extra fetch options (timeouts, limits, resolver, injected fetch). */
   fetchOptions?: FeedFetchOptions;
+  /**
+   * Optional server-only GitHub token override (Stage 9B). `undefined` resolves
+   * from the environment; `null` forces an unauthenticated request. Injected in
+   * tests; nothing is overridden in production.
+   */
+  githubToken?: string | null;
 }
 
 export interface IngestResult {
@@ -82,8 +88,12 @@ export interface IngestResult {
   httpStatus: number | null;
   itemsFound: number;
   itemsNew: number;
+  /** Existing Articles whose source facts were refreshed in place (edited items). */
+  itemsUpdated: number;
   itemsExisting: number;
   itemsSkipped: number;
+  /** Per-item acquisition failures (timeout/network/5xx/rate limit). */
+  itemsFailed: number;
   durationMs: number;
   notModified: boolean;
   errorCode: IngestErrorCode | null;
@@ -97,107 +107,161 @@ export async function ingestSource(
   deps: IngestDeps,
 ): Promise<IngestResult> {
   const now = deps.now ?? (() => new Date());
-  const fetchImpl = deps.fetchFeed ?? defaultFetchFeed;
-  const adapter = deps.adapter ?? feedAdapter;
   const startedMs = now().getTime();
 
   const fetchRow = await deps.sourceFetches.start(source.id);
 
   try {
-    if (!source.feed_url) {
-      throw new IngestError(
-        'INVALID_URL',
-        'Source has no feed_url configured',
-        {
-          retryable: false,
-        },
-      );
-    }
-
-    const response = await fetchImpl(source.feed_url, {
-      etag: source.etag,
-      lastModified: source.last_modified,
-      ...deps.fetchOptions,
+    // Source-type dispatch: RSS/Atom, GitHub Releases, or Hacker News all reduce
+    // to the same canonical acquisition result. Everything below this line is
+    // format-agnostic and shared by every Source type.
+    const acquired = await acquireForSource(source, {
+      fetchFeed: deps.fetchFeed ?? defaultFetchFeed,
+      adapter: deps.adapter ?? feedAdapter,
+      fetchOptions: deps.fetchOptions,
+      now,
+      githubToken: deps.githubToken,
     });
 
     const completedAt = now();
     const durationMs = completedAt.getTime() - startedMs;
 
-    if (response.notModified) {
+    if (acquired.notModified) {
       await applyHealth(deps.sources, source, 'success', completedAt, {
-        etag: response.etag ?? undefined,
-        lastModified: response.lastModified ?? undefined,
+        etag: acquired.etag ?? undefined,
+        lastModified: acquired.lastModified ?? undefined,
       });
       await deps.sourceFetches.complete(fetchRow.id, {
         status: 'SKIPPED',
-        httpStatus: response.status,
+        httpStatus: acquired.httpStatus,
         itemsFound: 0,
         itemsNew: 0,
         itemsUpdated: 0,
         durationMs,
         metadata: { notModified: true },
       });
-      return result(source.id, 'SKIPPED', response.status, {
+      return result(source.id, 'SKIPPED', acquired.httpStatus, {
         durationMs,
         notModified: true,
       });
     }
 
-    const parsed = adapter.parse({
-      body: response.body ?? '',
-      contentType: response.contentType,
-    });
-
     let itemsNew = 0;
+    let itemsUpdated = 0;
     let itemsExisting = 0;
     let itemsSkipped = 0;
 
-    for (const item of parsed.items) {
+    for (const item of acquired.items) {
       let input: CreateArticleInput;
       try {
         input = toArticleInput(source.id, item, {
-          defaultLanguage: parsed.language,
+          defaultLanguage: acquired.language,
         });
       } catch (error) {
-        // A single un-canonicalizable URL drops the item, not the feed.
+        // A single un-canonicalizable URL drops the item, not the whole Source.
         if (error instanceof CanonicalUrlError) {
           itemsSkipped += 1;
           continue;
         }
         throw error;
       }
-      const created = await deps.articles.createIfAbsent(input);
-      if (created) itemsNew += 1;
+      const { outcome } = await deps.articles.createOrRefresh(input);
+      if (outcome === 'created') itemsNew += 1;
+      else if (outcome === 'updated') itemsUpdated += 1;
       else itemsExisting += 1;
     }
 
-    const itemsFound = parsed.items.length;
-    // All present items failed to normalize → PARTIAL; otherwise SUCCESS.
+    const itemsFound = acquired.items.length;
+    const failures = acquired.failures ?? [];
+    const itemsFailed = failures.length;
+    const retryableFailures = failures.filter((f) => f.retryable).length;
+
+    // Distinguish a healthy-but-empty run from a failed acquisition. When a
+    // provider fetches items individually (e.g. Hacker News) and EVERY requested
+    // item failed to acquire — producing zero canonical items — the run is a
+    // FAILURE, never a healthy SUCCESS: the Source must degrade and stay
+    // observable. Intentional exclusions (comments, dead/deleted, malformed) are
+    // NOT failures and never trigger this path.
+    if (itemsFound === 0 && itemsFailed > 0) {
+      const representative = failures[0];
+      await applyHealth(deps.sources, source, 'failure', completedAt, {});
+      await deps.sourceFetches.complete(fetchRow.id, {
+        status: 'FAILED',
+        httpStatus: acquired.httpStatus,
+        itemsFound: 0,
+        itemsNew: 0,
+        itemsUpdated: 0,
+        durationMs,
+        errorCode: representative?.code ?? 'NETWORK',
+        errorMessage: `All ${itemsFailed} requested item(s) failed to acquire${
+          representative ? `: ${representative.message}` : ''
+        }`,
+        metadata: {
+          attempted: acquired.attempted ?? itemsFailed,
+          itemsFailed,
+          retryableFailures,
+          failures: failures.slice(0, 10),
+        },
+      });
+      return {
+        sourceId: source.id,
+        status: 'FAILED',
+        httpStatus: acquired.httpStatus,
+        itemsFound: 0,
+        itemsNew: 0,
+        itemsUpdated: 0,
+        itemsExisting: 0,
+        itemsSkipped: 0,
+        itemsFailed,
+        durationMs,
+        notModified: false,
+        errorCode: representative?.code ?? 'NETWORK',
+        errorMessage: `All ${itemsFailed} requested item(s) failed to acquire.`,
+      };
+    }
+
+    // PARTIAL when some items failed to acquire, or when every present item
+    // failed to normalize; otherwise SUCCESS. A PARTIAL still counts as a
+    // successful contact for health (the Source is reachable and produced some
+    // items), but records the failure detail in metadata for observability.
+    const allNormalizeFailed = itemsFound > 0 && itemsSkipped === itemsFound;
     const status: SourceFetchStatus =
-      itemsFound > 0 && itemsSkipped === itemsFound ? 'PARTIAL' : 'SUCCESS';
+      itemsFailed > 0 || allNormalizeFailed ? 'PARTIAL' : 'SUCCESS';
 
     await applyHealth(deps.sources, source, 'success', completedAt, {
-      etag: response.etag ?? undefined,
-      lastModified: response.lastModified ?? undefined,
+      etag: acquired.etag ?? undefined,
+      lastModified: acquired.lastModified ?? undefined,
     });
     await deps.sourceFetches.complete(fetchRow.id, {
       status,
-      httpStatus: response.status,
+      httpStatus: acquired.httpStatus,
       itemsFound,
       itemsNew,
-      itemsUpdated: 0,
+      itemsUpdated,
       durationMs,
-      metadata: { itemsExisting, itemsSkipped },
+      metadata: {
+        itemsExisting,
+        itemsSkipped,
+        ...(itemsFailed > 0
+          ? {
+              itemsFailed,
+              retryableFailures,
+              failures: failures.slice(0, 10),
+            }
+          : {}),
+      },
     });
 
     return {
       sourceId: source.id,
       status,
-      httpStatus: response.status,
+      httpStatus: acquired.httpStatus,
       itemsFound,
       itemsNew,
+      itemsUpdated,
       itemsExisting,
       itemsSkipped,
+      itemsFailed,
       durationMs,
       notModified: false,
       errorCode: null,
@@ -225,8 +289,10 @@ export async function ingestSource(
       httpStatus: ingestError.httpStatus,
       itemsFound: 0,
       itemsNew: 0,
+      itemsUpdated: 0,
       itemsExisting: 0,
       itemsSkipped: 0,
+      itemsFailed: 0,
       durationMs,
       notModified: false,
       errorCode: ingestError.code,
@@ -284,8 +350,10 @@ function result(
     httpStatus,
     itemsFound: 0,
     itemsNew: 0,
+    itemsUpdated: 0,
     itemsExisting: 0,
     itemsSkipped: 0,
+    itemsFailed: 0,
     durationMs: extra.durationMs,
     notModified: extra.notModified,
     errorCode: null,

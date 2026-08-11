@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 
+import { resolveGithubToken } from '@/config/env';
 import {
   AdminAuditLogRepository,
   ArticleRepository,
@@ -7,6 +8,30 @@ import {
   SourceRepository,
   TopicRepository,
 } from '@/domain';
+
+import type { SourceFormValues } from '../source-form';
+
+/**
+ * Project a stored `source_config` object into the form's discrete config
+ * fields. Unknown/missing keys fall back to the form's blank defaults, so
+ * RSS/Atom Sources render no config fields.
+ */
+function sourceConfigFields(
+  config: Record<string, unknown>,
+): Partial<SourceFormValues> {
+  const str = (v: unknown): string =>
+    v === undefined || v === null ? '' : String(v);
+  return {
+    cfgOwner: str(config.owner),
+    cfgRepo: str(config.repo),
+    cfgPrereleases: str(config.prereleases) || 'exclude',
+    cfgPerPage: str(config.perPage),
+    cfgMaxPages: str(config.maxPages),
+    cfgMode: str(config.mode) || 'top',
+    cfgMaxItems: str(config.maxItems),
+    cfgIds: Array.isArray(config.ids) ? config.ids.join(', ') : '',
+  };
+}
 
 import {
   AdminLink,
@@ -123,8 +148,10 @@ export default async function SourceDetailPage({
                   ? ''
                   : String(source.poll_interval),
               defaultTopicId: source.default_topic_id ?? '',
+              ...sourceConfigFields(source.source_config),
             }}
             submitLabel="Save changes"
+            githubTokenConfigured={resolveGithubToken() !== null}
           />
         </Card>
       </div>

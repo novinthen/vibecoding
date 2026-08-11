@@ -87,6 +87,17 @@ const optionalTopicId = z
   .optional()
   .or(z.literal('').transform(() => null));
 
+/**
+ * Source-type adapter configuration as an already-assembled object (the server
+ * action builds it from the type-specific form fields). Here it is only shape-
+ * checked as "an object or undefined"; the AUTHORITATIVE per-type validation
+ * (owner/repo/mode/bounds) happens in the source service via
+ * {@link import('@/ingestion/source-config').sourceConfigForStorage}, because the
+ * Source type selects which config schema applies. `undefined` means "no config
+ * submitted" (RSS/Atom, or an edit that left config untouched).
+ */
+const optionalSourceConfigObject = z.record(z.string(), z.unknown()).optional();
+
 export const createSourceSchema = z.object({
   name: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
@@ -97,6 +108,7 @@ export const createSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
+  sourceConfig: optionalSourceConfigObject,
 });
 export type CreateSourceValues = z.infer<typeof createSourceSchema>;
 
@@ -109,6 +121,7 @@ export const updateSourceSchema = z.object({
   language: optionalLanguage,
   pollInterval: optionalPollInterval,
   defaultTopicId: optionalTopicId,
+  sourceConfig: optionalSourceConfigObject,
 });
 export type UpdateSourceValues = z.infer<typeof updateSourceSchema>;
 

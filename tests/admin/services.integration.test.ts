@@ -155,6 +155,69 @@ describe.skipIf(!hasDb)('admin services (integration)', () => {
       });
     });
 
+    it('persists a validated GitHub source_config and round-trips it', async () => {
+      await inRollbackTx(async (tx) => {
+        const created = await createSource(tx, ADMIN, {
+          name: 'Next.js Releases',
+          slug: 'nextjs-releases',
+          sourceType: 'GITHUB',
+          authorityTier: 'TRUSTED',
+          sourceConfig: {
+            owner: 'vercel',
+            repo: 'next.js',
+            prereleases: 'exclude',
+          },
+        });
+        expect(created.source_type).toBe('GITHUB');
+        expect(created.source_config).toMatchObject({
+          owner: 'vercel',
+          repo: 'next.js',
+          prereleases: 'exclude',
+          perPage: 30,
+          maxPages: 1,
+        });
+        const reloaded = await new SourceRepository(tx).findById(created.id);
+        expect(reloaded?.source_config).toMatchObject({ owner: 'vercel' });
+      });
+    });
+
+    it('rejects an invalid GitHub source_config as a field error', async () => {
+      await inRollbackTx(async (tx) => {
+        await expect(
+          createSource(tx, ADMIN, {
+            name: 'Bad GH',
+            slug: 'bad-gh',
+            sourceType: 'GITHUB',
+            authorityTier: 'TRUSTED',
+            // Missing repo, and a path-traversal owner.
+            sourceConfig: { owner: '..' },
+          }),
+        ).rejects.toBeInstanceOf(AdminValidationError);
+        expect(await new SourceRepository(tx).findBySlug('bad-gh')).toBeNull();
+      });
+    });
+
+    it('updates a Hacker News source_config in place', async () => {
+      await inRollbackTx(async (tx) => {
+        const created = await createSource(tx, ADMIN, {
+          name: 'HN Top',
+          slug: 'hn-top',
+          sourceType: 'HACKER_NEWS',
+          authorityTier: 'COMMUNITY',
+          sourceConfig: { mode: 'top', maxItems: 50 },
+        });
+        const updated = await updateSource(tx, ADMIN, created.id, {
+          name: 'HN Best',
+          authorityTier: 'COMMUNITY',
+          sourceConfig: { mode: 'best', maxItems: 25 },
+        });
+        expect(updated.source_config).toMatchObject({
+          mode: 'best',
+          maxItems: 25,
+        });
+      });
+    });
+
     it('edits permitted fields and audits before/after', async () => {
       await inRollbackTx(async (tx) => {
         const created = await createSource(tx, ADMIN, {

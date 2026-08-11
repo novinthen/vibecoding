@@ -163,6 +163,116 @@ export class ArticleRepository {
     );
     return result.rows[0] ?? null;
   }
+
+  /**
+   * Insert an Article, or refresh an existing one's SOURCE FACTS when the
+   * upstream item has changed (Stage 9B — e.g. an edited GitHub Release under a
+   * stable external id).
+   *
+   * Provenance rules (see CLAUDE.md): this only ever writes source-supplied
+   * columns. It NEVER touches editorial/publication state (`status`), AI-derived
+   * data (`normalized_title`, `article_enrichments`), Story membership, or
+   * ranking — those live in other columns/tables and are left untouched. A
+   * change is detected deterministically from the content hash (title+excerpt)
+   * or a newer `source_updated_at`; the dedup identity (`url_hash`,
+   * `external_id`) is never rewritten.
+   *
+   *  - `created`   — no existing row; inserted.
+   *  - `updated`   — existing row whose source facts changed; refreshed in place.
+   *  - `unchanged` — existing row with identical source facts; left as-is.
+   */
+  async createOrRefresh(input: CreateArticleInput): Promise<{
+    row: ArticleRow;
+    outcome: 'created' | 'updated' | 'unchanged';
+  }> {
+    const inserted = await this.createIfAbsent(input);
+    if (inserted) return { row: inserted, outcome: 'created' };
+
+    // A per-Source duplicate exists — locate it by the same keys the unique
+    // indexes use (external_id first, then url_hash).
+    const existing =
+      (input.externalId != null
+        ? await this.findBySourceAndExternalId(input.sourceId, input.externalId)
+        : null) ??
+      (input.urlHash != null
+        ? await this.findBySourceAndUrlHash(input.sourceId, input.urlHash)
+        : null);
+
+    // Nothing to refresh against (e.g. a concurrent delete) — treat as unchanged.
+    if (!existing) return await this.forceReturnExisting(input);
+
+    if (!sourceFactsChanged(existing, input)) {
+      return { row: existing, outcome: 'unchanged' };
+    }
+
+    const refreshed = await this.db.query<ArticleRow>(
+      `UPDATE articles SET
+         url               = $2,
+         canonical_url     = $3,
+         original_title    = $4,
+         original_excerpt  = $5,
+         author            = $6,
+         published_at      = $7,
+         source_updated_at = $8,
+         image_url         = $9,
+         language          = $10,
+         content_hash      = $11
+       WHERE id = $1
+       RETURNING *`,
+      [
+        existing.id,
+        input.url,
+        input.canonicalUrl ?? null,
+        input.originalTitle,
+        input.originalExcerpt ?? null,
+        input.author ?? null,
+        toParam(input.publishedAt),
+        toParam(input.sourceUpdatedAt),
+        input.imageUrl ?? null,
+        input.language ?? null,
+        input.contentHash ?? null,
+      ],
+    );
+    return { row: refreshed.rows[0] as ArticleRow, outcome: 'updated' };
+  }
+
+  /** Fallback: re-read the row (rare concurrent-delete race). */
+  private async forceReturnExisting(input: CreateArticleInput): Promise<{
+    row: ArticleRow;
+    outcome: 'created' | 'updated' | 'unchanged';
+  }> {
+    const row = await this.createIfAbsent(input);
+    if (row) return { row, outcome: 'created' };
+    // Extremely unlikely: another writer re-inserted it; report unchanged.
+    const existing =
+      (input.externalId != null
+        ? await this.findBySourceAndExternalId(input.sourceId, input.externalId)
+        : null) ??
+      (input.urlHash != null
+        ? await this.findBySourceAndUrlHash(input.sourceId, input.urlHash)
+        : null);
+    return { row: existing as ArticleRow, outcome: 'unchanged' };
+  }
+}
+
+/**
+ * True when the incoming item's source facts differ from the stored row, so a
+ * refresh is warranted. Deterministic: a changed content hash (title/excerpt) is
+ * the primary signal; a newer source_updated_at is a secondary signal for
+ * providers that expose an edit timestamp.
+ */
+function sourceFactsChanged(
+  existing: ArticleRow,
+  input: CreateArticleInput,
+): boolean {
+  if ((input.contentHash ?? null) !== existing.content_hash) return true;
+  const incoming = toParam(input.sourceUpdatedAt);
+  if (incoming !== null && existing.source_updated_at !== null) {
+    if (Date.parse(incoming) > Date.parse(existing.source_updated_at)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Filter/pagination options for the admin Article search. */

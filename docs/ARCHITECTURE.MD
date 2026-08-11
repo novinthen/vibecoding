@@ -107,6 +107,47 @@ healthCheck()
 
 The rest of the application should not care whether an item came from RSS, GitHub, Hacker News, or RSSHub.
 
+### Stage 9B implementation — acquisition seam
+
+Stage 9B realises this boundary as a **source-type acquisition seam** under
+`src/ingestion/acquire`. Each provider is a new *input*, never a new *pipeline*:
+
+```text
+source-specific acquisition (RSS/Atom | GitHub Releases | Hacker News)
+  → NormalizedItem (single canonical shape)
+  → canonicalization + hashing
+  → Article persistence / exact dedup (createIfAbsent)
+  → SourceFetch audit + Source health
+  → enrichment → clustering → ranking → Stage 9A automation
+```
+
+- A `SourceAcquirer` owns exactly one concern: turning a Source's wire protocol
+  into `NormalizedItem[]` plus the audit/health metadata (`AcquisitionResult`).
+  `ingestSource` dispatches on `source_type` (`acquirerForSource`) and everything
+  below the dispatch line is format-agnostic and shared by every Source type.
+- Every acquirer fetches through the **same safe fetcher** (`fetchFeed`), so the
+  Stage 3 SSRF guard, redirect bounds, timeout, and body-size caps apply to every
+  provider identically. The fetcher gained optional extra request headers (for a
+  JSON `Accept`, a provider API version, and an `Authorization` credential) and
+  drops the `Authorization` header before following a cross-origin redirect so a
+  provider token can never leak to a redirected host.
+- **Source configuration** lives on the Source, not the Article: a `source_config`
+  JSONB column (migration `0018`) holds per-type acquisition settings, validated
+  by a per-type Zod schema (`src/ingestion/source-config.ts`). Secrets are never
+  stored here — provider credentials (e.g. `GITHUB_TOKEN`) are server-only
+  environment configuration.
+- **GitHub Releases** (`GITHUB`): official REST API, `releases` only (never every
+  commit/issue). Bounded pagination (`perPage`/`maxPages`), draft exclusion, an
+  explicit prerelease policy, a stable `github:release:{id}` external id (so an
+  *edited* release never duplicates), the `html_url` canonical target, a bounded
+  release-note excerpt, ETag conditional requests, and 403/429 rate-limit
+  classification.
+- **Hacker News** (`HACKER_NEWS`): official Firebase API, story-type items only
+  (comments/deleted/dead/malformed excluded), bounded `top`/`best`/`new`/explicit
+  ids, the external target URL where present or the HN discussion URL for
+  text-only Ask HN. Volatile score/comment counts are deliberately NOT captured
+  onto the Article and never influence Stage 8 ranking.
+
 ## Multi-Publication Architecture
 
 The system must support multiple domains and languages without duplicating the ingestion/intelligence backend.

@@ -1,0 +1,60 @@
+[
+  {
+    "id": 100,
+    "html_url": "https://github.com/vercel/next.js/releases/tag/v15.0.0",
+    "tag_name": "v15.0.0",
+    "name": "Next.js 15",
+    "body": "## Highlights\n\n- **React 19** support\n- Turbopack improvements\n\nSee the [upgrade guide](https://nextjs.org).",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2024-10-21T12:00:00Z",
+    "published_at": "2024-10-21T13:00:00Z",
+    "author": { "login": "timneutkens" }
+  },
+  {
+    "id": 101,
+    "html_url": "https://github.com/vercel/next.js/releases/tag/v15.1.0-canary.0",
+    "tag_name": "v15.1.0-canary.0",
+    "name": "v15.1.0-canary.0",
+    "body": "Canary build.",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2024-11-01T09:00:00Z",
+    "published_at": "2024-11-01T09:30:00Z",
+    "author": { "login": "ijjk" }
+  },
+  {
+    "id": 102,
+    "html_url": "https://github.com/vercel/next.js/releases/tag/v15.2.0-draft",
+    "tag_name": "v15.2.0-draft",
+    "name": "Unpublished draft",
+    "body": "Not ready.",
+    "draft": true,
+    "prerelease": false,
+    "created_at": "2024-11-05T09:00:00Z",
+    "published_at": null,
+    "author": { "login": "ijjk" }
+  },
+  {
+    "id": 103,
+    "html_url": "https://github.com/vercel/next.js/releases/tag/v14.2.15",
+    "tag_name": "v14.2.15",
+    "name": null,
+    "body": null,
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2024-10-15T08:00:00Z",
+    "published_at": "2024-10-15T08:30:00Z",
+    "author": null
+  },
+  {
+    "id": 104,
+    "tag_name": "v0.0.0-broken",
+    "name": "Missing html_url",
+    "body": "Malformed — no html_url.",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2024-01-01T00:00:00Z",
+    "published_at": "2024-01-01T00:00:00Z"
+  }
+]

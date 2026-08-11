@@ -66,6 +66,43 @@ describe('admin validation schemas', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts an assembled source config object (per-type shape checked later)', () => {
+    const parsed = createSourceSchema.parse({
+      name: 'Next.js Releases',
+      sourceType: 'GITHUB',
+      authorityTier: 'TRUSTED',
+      sourceConfig: {
+        owner: 'vercel',
+        repo: 'next.js',
+        prereleases: 'exclude',
+      },
+    });
+    expect(parsed.sourceConfig).toMatchObject({
+      owner: 'vercel',
+      repo: 'next.js',
+    });
+  });
+
+  it('treats a missing source config as undefined (RSS/Atom carry none)', () => {
+    const parsed = createSourceSchema.parse({
+      name: 'Blog',
+      sourceType: 'RSS',
+      authorityTier: 'TRUSTED',
+      feedUrl: 'https://example.com/feed',
+    });
+    expect(parsed.sourceConfig).toBeUndefined();
+  });
+
+  it('rejects a non-object source config', () => {
+    const result = createSourceSchema.safeParse({
+      name: 'x',
+      sourceType: 'GITHUB',
+      authorityTier: 'TRUSTED',
+      sourceConfig: 'owner=vercel',
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('requires a valid status for Article status changes', () => {
     expect(
       updateArticleStatusSchema.safeParse({ status: 'HIDDEN' }).success,

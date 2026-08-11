@@ -27,14 +27,27 @@ class FakeArticles {
   readonly rows: ArticleRow[] = [];
   private seq = 0;
 
-  createIfAbsent(input: CreateArticleInput): Promise<ArticleRow | null> {
+  createOrRefresh(input: CreateArticleInput): Promise<{
+    row: ArticleRow;
+    outcome: 'created' | 'updated' | 'unchanged';
+  }> {
     const clash = this.rows.find(
       (r) =>
         r.source_id === input.sourceId &&
         ((input.externalId != null && r.external_id === input.externalId) ||
           (input.urlHash != null && r.url_hash === input.urlHash)),
     );
-    if (clash) return Promise.resolve(null);
+    if (clash) {
+      const changed = (input.contentHash ?? null) !== clash.content_hash;
+      if (changed) {
+        clash.original_title = input.originalTitle;
+        clash.content_hash = input.contentHash ?? null;
+        clash.url = input.url;
+        clash.canonical_url = input.canonicalUrl ?? null;
+        return Promise.resolve({ row: clash, outcome: 'updated' });
+      }
+      return Promise.resolve({ row: clash, outcome: 'unchanged' });
+    }
     this.seq += 1;
     const row = {
       id: `article-${this.seq}`,
@@ -47,7 +60,7 @@ class FakeArticles {
       content_hash: input.contentHash ?? null,
     } as ArticleRow;
     this.rows.push(row);
-    return Promise.resolve(row);
+    return Promise.resolve({ row, outcome: 'created' });
   }
 }
 
@@ -108,6 +121,7 @@ function makeSource(overrides: Partial<SourceRow> = {}): SourceRow {
     enabled: true,
     language: null,
     default_topic_id: null,
+    source_config: {},
     last_fetch_at: null,
     last_success_at: null,
     failure_count: 0,

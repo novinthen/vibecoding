@@ -11,7 +11,18 @@ ingestion system. It lives inside the same Next.js application under `/admin`
 - **Sources** (`/admin/sources`): list, inspect, create, edit permitted fields,
   enable/disable, inspect health / consecutive failures / last success /
   conditional-fetch (ETag / Last-Modified) state, and **manually trigger
-  ingestion** for one Source through the existing Stage 3 engine.
+  ingestion** for one Source through the existing Stage 3 engine. The Source form
+  shows **source-type-specific acquisition controls** (Stage 9B) that appear only
+  for the relevant type: GitHub Releases (owner, repository, prerelease policy,
+  per-page, max pages); Hacker News (mode top/best/new/ids, max items, and an IDs
+  field shown only in `ids` mode); RSS/Atom show no adapter controls. The Source
+  type is immutable on edit. All input is validated **server-side** for the
+  Source's type before any write (owner/repo bounds, mode/enum/pagination
+  limits) — the form is only an input surface. **Secrets are never entered or
+  stored here** — a GitHub token is server-only environment configuration
+  (`GITHUB_TOKEN`), never persisted on the Source and never sent to the browser.
+  When a token is configured, the GitHub section shows a read-only
+  "authentication configured" indicator (never the value).
 - **Fetches** (`/admin/fetches`): recent `SourceFetch` attempts across all
   Sources with status filtering, HTTP/result info, counts, and error codes.
 - **Articles** (`/admin/articles`): search/filter by Source, status, and
@@ -162,6 +173,7 @@ runtime dependencies:
 | `ADMIN_SESSION_SECRET`  | Yes                | Cookie signing secret. ≥ 32 chars in production.   |
 | `ADMIN_USERS`           | Yes                | JSON roster of `{ username, passwordHash, role? }`.|
 | `DATABASE_URL`          | Yes                | The admin reads/writes Postgres.                   |
+| `GITHUB_TOKEN`          | No                 | Optional server-only token raising the GitHub API rate limit for Release ingestion (Stage 9B). Never exposed, stored in `source_config`, or logged. |
 
 Example `ADMIN_USERS` (never commit real values):
 
