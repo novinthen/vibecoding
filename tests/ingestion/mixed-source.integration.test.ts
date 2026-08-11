@@ -266,9 +266,11 @@ describe.skipIf(!hasDb)('mixed-source ingestion (integration)', () => {
       // Editorial/derived state untouched: status remains the discovered default.
       expect(after[0]?.status).toBe('DISCOVERED');
 
-      // SourceFetch reports the update accurately.
+      // SourceFetch reports the update accurately. Assert order-independently:
+      // the create and update fetches can share a started_at to the millisecond,
+      // so `listRecent` (started_at DESC) ordering is not relied upon here.
       const recent = await fetches.listRecent(github.id);
-      expect(recent[0]?.items_updated).toBe(1);
+      expect(recent.some((r) => r.items_updated === 1)).toBe(true);
 
       // A truly unchanged re-run is a no-op.
       const third = await ingestSource(
