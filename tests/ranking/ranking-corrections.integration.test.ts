@@ -7,7 +7,6 @@ import { ArticleRepository } from '@/domain/repositories/article-repository';
 import { PublicationRepository } from '@/domain/repositories/publication-repository';
 import { PublicationStoryRepository } from '@/domain/repositories/publication-story-repository';
 import { SourceRepository } from '@/domain/repositories/source-repository';
-import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repository';
 import { StoryRepository } from '@/domain/repositories/story-repository';
 import { AdminRankingService } from '@/admin/ranking-admin-service';
 import { RankingEngine } from '@/ranking/ranking-engine';

@@ -4,11 +4,9 @@ import { closePool, getPool, withTransaction, type Db } from '@/db/client';
 import { migrate } from '@/db/migrate';
 
 import { ArticleRepository } from '@/domain/repositories/article-repository';
-import { PublicationRepository } from '@/domain/repositories/publication-repository';
-import { PublicationStoryRepository } from '@/domain/repositories/publication-story-repository';
 import { SourceRepository } from '@/domain/repositories/source-repository';
-import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repository';
 import { StoryRepository } from '@/domain/repositories/story-repository';
+import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repository';
 import { AdminAuditLogRepository } from '@/domain/repositories/admin-audit-log-repository';
 import { AdminRankingService } from '@/admin/ranking-admin-service';
 import type { AdminSession } from '@/admin/auth/session';
@@ -143,9 +141,9 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
         // Force transaction rollback
         throw new Error('Simulated audit failure');
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       errorThrown = true;
-      expect(err.message).toContain('Simulated audit failure');
+      expect((err as Error).message).toContain('Simulated audit failure');
     }
 
     expect(errorThrown).toBe(true);
