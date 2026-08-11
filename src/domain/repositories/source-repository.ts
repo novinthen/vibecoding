@@ -1,5 +1,7 @@
 import type { Db } from '@/db/client';
 
+import type { SourceConfig } from '@/ingestion/source-config';
+
 import type { AuthorityTier, HealthStatus, SourceType } from '../enums';
 import type { SourceRow } from '../types';
 

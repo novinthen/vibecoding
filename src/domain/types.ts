@@ -127,6 +127,7 @@ export interface SourceRow {
   enabled: boolean;
   language: string | null;
   default_topic_id: string | null;
+  source_config: Record<string, unknown>;
   last_fetch_at: string | null;
   last_success_at: string | null;
   failure_count: number;
