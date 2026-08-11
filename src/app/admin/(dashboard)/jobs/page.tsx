@@ -6,10 +6,7 @@
  */
 
 import { Suspense } from 'react';
-import { cookies } from 'next/headers';
 
-import { assertAuthenticated } from '@/admin/auth/guard';
-import { sessionFromCookies } from '@/admin/auth/session';
 import { getPool } from '@/db/client';
 import { JobRunRepository } from '@/jobs/job-run-repository';
 
@@ -18,10 +15,7 @@ export const metadata = {
 };
 
 export default async function JobRunsPage() {
-  // Any authenticated admin (including VIEWER) can view job runs.
-  const cookieStore = await cookies();
-  const session = sessionFromCookies(cookieStore);
-  assertAuthenticated(session);
+  // Auth is enforced by the (dashboard) layout.
 
   return (
     <div className="space-y-6">
