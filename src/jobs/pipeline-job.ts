@@ -19,9 +19,9 @@ import type { Pool } from 'pg';
 import { runClusteringJob, type ClusteringJobOptions } from './clustering-job';
 import { runEnrichmentJob, type EnrichmentJobOptions } from './enrichment-job';
 import { runIngestionJob, type IngestionJobOptions } from './ingestion-job';
-import { buildJobResult, runJob } from './job-runner';
+import { runJob } from './job-runner';
 import { runRankingJob, type RankingJobOptions } from './ranking-job';
-import type { JobOutcome } from './types';
+import type { JobOutcome, JobResult, JobStatus } from './types';
 
 export interface PipelineJobOptions {
   ingestion?: IngestionJobOptions;
@@ -151,6 +151,10 @@ function shouldStopPipeline(
 
 /**
  * Build a combined pipeline outcome from individual stage results.
+ *
+ * CRITICAL: Pipeline status logic must handle early stop due to SKIPPED stage.
+ * A SKIPPED required stage (lock held) means the pipeline did NOT complete,
+ * even if no individual items failed.
  */
 function buildPipelineOutcome(
   startedAt: Date,
@@ -182,6 +186,11 @@ function buildPipelineOutcome(
     ? `${earlyStopReason} Stages: ${stageSummaries.join(', ')}`
     : `Pipeline completed. Stages: ${stageSummaries.join(', ')}`;
 
+  // Check if any required stage was SKIPPED (lock held)
+  const hasSkippedStage = stageResults.some(
+    ({ outcome }) => outcome.result.status === 'SKIPPED',
+  );
+
   const metadata = {
     stagesRun: stageResults.length,
     stageResults: stageResults.map(({ stage, outcome }) => ({
@@ -193,23 +202,47 @@ function buildPipelineOutcome(
       errorSummary: outcome.result.errorSummary,
     })),
     earlyStop: earlyStopReason !== null,
+    reason: hasSkippedStage ? 'required_stage_locked' : earlyStopReason ? 'stage_failure' : null,
   };
 
-  const result = buildJobResult(
-    JOB_NAME,
+  // Determine pipeline status
+  let status: JobStatus;
+
+  if (hasSkippedStage) {
+    // CRITICAL: If any required stage was SKIPPED (lock held), pipeline is PARTIAL
+    // even if no individual items failed. The pipeline did not complete.
+    status = 'PARTIAL';
+  } else if (failed === 0 && !earlyStopReason) {
+    // Normal success: no failures, no early stop
+    status = 'SUCCEEDED';
+  } else if (failed === attempted && attempted > 0) {
+    // Total failure: all items failed
+    status = 'FAILED';
+  } else {
+    // Partial: some items failed
+    status = 'PARTIAL';
+  }
+
+  const result: JobResult = {
+    jobName: JOB_NAME,
+    status,
     startedAt,
     finishedAt,
-    { attempted, succeeded, skipped, failed, retryableFailures },
+    durationMs: finishedAt.getTime() - startedAt.getTime(),
+    attempted,
+    succeeded,
+    skipped,
+    failed,
+    retryableFailures,
     errorSummary,
     metadata,
-  );
+  };
 
-  // Pipeline outcome is SUCCESS if all stages succeeded, PARTIAL if any stage
-  // had partial failures, or FAILED if any stage failed systemically.
-  if (result.status === 'SUCCEEDED') {
+  // Pipeline outcome kind based on status
+  if (status === 'SUCCEEDED') {
     return { kind: 'SUCCESS', result };
   }
-  if (result.status === 'PARTIAL') {
+  if (status === 'PARTIAL') {
     return {
       kind: 'PARTIAL',
       result,
