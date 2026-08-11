@@ -20,7 +20,7 @@ import {
   runEnrichmentJob,
   runIngestionJob,
   runJob,
-  runPipelineJob,
+  runPipelineWithLock,
   runRankingJob,
 } from '../src/jobs';
 
@@ -68,9 +68,9 @@ async function main() {
 
       case 'pipeline':
         console.log('[CLI] Running full pipeline...');
-        outcome = await runJob('pipeline', async (p) => runPipelineJob(p), {
-          pool,
-        });
+        // runPipelineWithLock takes the pipeline-level lock and records the
+        // parent job_run; stage locks/job_runs are created inside.
+        outcome = await runPipelineWithLock(pool);
         break;
 
       default:

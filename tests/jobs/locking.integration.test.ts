@@ -65,14 +65,20 @@ describe.skipIf(skipIfNoDb)('Job locking integration (DB-gated)', () => {
     const lock = await tryAcquireJobLock(pool, 'test-job-4');
     expect(lock).not.toBeNull();
 
-    // Simulate error and cleanup
-    try {
-      throw new Error('Test error');
-    } finally {
-      await lock!.release();
-    }
+    // A job body that throws must still release the lock via finally. The
+    // throw is expected here, so it is caught — the assertion is that the lock
+    // is free afterwards.
+    await expect(
+      (async () => {
+        try {
+          throw new Error('Test error');
+        } finally {
+          await lock!.release();
+        }
+      })(),
+    ).rejects.toThrow('Test error');
 
-    // Lock should now be available
+    // Lock must now be available (release ran despite the throw).
     const lock2 = await tryAcquireJobLock(pool, 'test-job-4');
     expect(lock2).not.toBeNull();
     await lock2!.release();

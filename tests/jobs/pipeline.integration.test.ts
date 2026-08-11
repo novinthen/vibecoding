@@ -9,7 +9,8 @@ import { Pool } from 'pg';
 
 import { runJob } from '@/jobs/job-runner';
 import { runIngestionJob } from '@/jobs/ingestion-job';
-import { runPipelineJob } from '@/jobs/pipeline-job';
+import { runPipelineJob, runPipelineWithLock } from '@/jobs/pipeline-job';
+import { tryAcquireJobLock } from '@/jobs/locking';
 import { buildJobResult } from '@/jobs/job-runner';
 import type { JobOutcome } from '@/jobs/types';
 
@@ -33,59 +34,68 @@ describe.skipIf(skipIfNoDb)('Pipeline integration (DB-gated)', () => {
     );
   });
 
-  it('creates independent job_runs for each pipeline stage', async () => {
-    await runPipelineJob(pool, {
-      ingestion: { batchLimit: 0 }, // Process 0 sources (fast test)
+  it('creates independent job_runs for the parent and every pipeline stage', async () => {
+    // Use the production entry point: it takes the pipeline-level lock AND
+    // records the parent `pipeline` job_run. Calling runPipelineJob directly
+    // would record only the child stages.
+    const outcome = await runPipelineWithLock(pool, {
+      ingestion: { batchLimit: 0 }, // Process 0 sources (fast, no network)
       enrichment: { batchLimit: 0 },
       clustering: { batchLimit: 0 },
       ranking: { batchLimit: 0 },
     });
 
-    // Should have 5 job runs: pipeline + 4 stages
+    // No locks held and no items to process → the whole pipeline must succeed.
+    expect(outcome.result.status).toBe('SUCCEEDED');
+
     const allRuns = await pool.query<{ job_name: string; status: string }>(
       "SELECT job_name, status FROM job_runs WHERE job_name IN ('pipeline', 'ingest', 'enrich', 'cluster', 'rank') ORDER BY started_at ASC",
     );
 
-    // Parent pipeline + 4 child stages OR parent pipeline + 3 child stages if one was skipped
-    expect(allRuns.rows.length).toBeGreaterThanOrEqual(4);
-    expect(allRuns.rows.some((r) => r.job_name === 'pipeline')).toBe(true);
-
-    // At least some of the stage jobs should exist
-    const hasIngest = allRuns.rows.some((r) => r.job_name === 'ingest');
-    const hasEnrich = allRuns.rows.some((r) => r.job_name === 'enrich');
-    const hasCluster = allRuns.rows.some((r) => r.job_name === 'cluster');
-    const hasRank = allRuns.rows.some((r) => r.job_name === 'rank');
-
-    // Should have at least 3 of the 4 stages
-    const stageCount = [hasIngest, hasEnrich, hasCluster, hasRank].filter(
-      Boolean,
-    ).length;
-    expect(stageCount).toBeGreaterThanOrEqual(3);
+    // Exactly one parent + one row per stage. No weaker assertion: with no
+    // contention every stage must run.
+    expect(allRuns.rows.length).toBe(5);
+    expect(allRuns.rows.map((r) => r.job_name)).toEqual([
+      'pipeline',
+      'ingest',
+      'enrich',
+      'cluster',
+      'rank',
+    ]);
+    expect(allRuns.rows.every((r) => r.status === 'SUCCEEDED')).toBe(true);
   });
 
-  it('standalone ingest cannot overlap pipeline ingest', async () => {
-    // Start pipeline with a slow ingestion stage to ensure overlap
-    const pipelinePromise = runPipelineJob(pool, {
-      ingestion: { batchLimit: 1 }, // Process at least 1 source to take time
-      enrichment: { batchLimit: 0 },
-      clustering: { batchLimit: 0 },
-      ranking: { batchLimit: 0 },
-    });
+  it('standalone ingest is refused while the ingest stage lock is held', async () => {
+    // Hold the ingest lock on a REAL separate session, exactly as a running
+    // pipeline ingest stage would. This asserts the mutual-exclusion invariant
+    // deterministically instead of racing a fast in-process stage.
+    const heldLock = await tryAcquireJobLock(pool, 'ingest');
+    expect(heldLock).not.toBeNull();
 
-    // Small delay to ensure pipeline acquires ingest lock
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      const standaloneOutcome = await runJob(
+        'ingest',
+        async (p) => runIngestionJob(p, { batchLimit: 0 }),
+        { pool },
+      );
 
-    // Try standalone ingest while pipeline ingest stage is running
-    const standaloneOutcome = await runJob(
+      // Standalone must be refused, not run concurrently.
+      expect(standaloneOutcome.result.status).toBe('SKIPPED');
+      expect(
+        (standaloneOutcome.result.metadata as Record<string, unknown> | null)
+          ?.reason,
+      ).toBe('lock_held');
+    } finally {
+      await heldLock!.release();
+    }
+
+    // After release the same job proceeds normally.
+    const afterRelease = await runJob(
       'ingest',
       async (p) => runIngestionJob(p, { batchLimit: 0 }),
       { pool },
     );
-
-    // Standalone should be skipped (lock held by pipeline stage)
-    expect(standaloneOutcome.result.status).toBe('SKIPPED');
-
-    await pipelinePromise;
+    expect(afterRelease.result.status).toBe('SUCCEEDED');
   });
 
   it('pipeline stage SKIPPED is reflected correctly', async () => {

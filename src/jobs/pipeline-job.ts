@@ -35,10 +35,35 @@ export interface PipelineJobOptions {
 const JOB_NAME = 'pipeline';
 
 /**
+ * Production entry point for the full pipeline.
+ *
+ * Wraps {@link runPipelineJob} in the common runner under the `pipeline` job
+ * name, which is what creates BOTH:
+ *  - the pipeline-level advisory lock (two full pipeline runs cannot overlap);
+ *  - the parent `pipeline` job_run row (observability).
+ *
+ * Callers must use THIS function rather than {@link runPipelineJob} directly:
+ * calling the inner function skips the pipeline lock and never records a parent
+ * job_run. `runPipelineJob` remains exported as the inner work function so the
+ * runner can supply the pooled connection, and so stage-ordering can be tested
+ * in isolation.
+ */
+export async function runPipelineWithLock(
+  pool: Pool,
+  options: PipelineJobOptions = {},
+): Promise<JobOutcome> {
+  return runJob(JOB_NAME, async (p) => runPipelineJob(p, options), { pool });
+}
+
+/**
  * Run the full intelligence pipeline: ingest → enrich → cluster → rank.
  * Each stage runs through runJob() with its own lock, so pipeline stages
  * respect standalone job locks. Returns a combined outcome with per-stage
  * results in metadata.
+ *
+ * NOTE: this is the INNER work function — it does not take the pipeline-level
+ * lock and does not create the parent `pipeline` job_run. Use
+ * {@link runPipelineWithLock} from production/CLI callers.
  *
  * @param pool - Database pool.
  * @param options - Per-stage options and pipeline behavior.
