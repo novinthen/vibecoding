@@ -181,3 +181,41 @@ shows a "not configured" notice and no session can be issued.
 - Admin mutation input is validated server-side with Zod (`src/admin/validation.ts`).
 - No secrets, raw credentials, or internal stack traces are exposed to the
   browser; unexpected errors are logged server-side and surfaced generically.
+
+---
+
+## Stage 8: Ranking Administration
+
+### Story Ranking Review
+
+Admin Story detail (`/admin/stories/[id]`) displays:
+- Current ranking score (calculated_score)
+- Component signals breakdown (freshness, source diversity, authority, activity, novelty, AI importance, editorial adjustment)
+- Ranking method/version and calculation timestamp
+- Ranking history (collapsible list of previous versions)
+- Manual trigger button (mutating admins only)
+
+### Ranking Operations
+
+**Trigger Ranking** (authorized, audited):
+- Manual recalculation via "Recalculate Ranking" button
+- Forces new ranking even if recent calculation exists
+- Records audit log entry: `STORY_RANKING_TRIGGER`
+- Publication-aware (can rank for specific Publication)
+
+**Audit Trail:**
+- All ranking operations logged in `admin_audit_log`
+- Actions: `STORY_RANKING_TRIGGER`, `STORY_RANKING_BATCH`
+- Metadata includes: ranking ID, method/version, calculated score
+
+### Editorial Controls
+
+PublicationStory fields affecting ranking:
+- `featured` (boolean): Adds +0.5 to ranking score
+- `editorial_priority` (integer): Scaled by 0.1 and added to score
+- `suppress_ranking` (boolean): Large negative penalty (-1000), effectively excludes from ranked lists
+
+Editorial adjustments are applied during ranking calculation, not in public SQL queries (prevents double-counting).
+
+---
+

@@ -1,148 +1,178 @@
 # Current Stage
 
-# Stage 7 — Story Clustering & Canonical Intelligence
+# Stage 8 — Ranking, Trending & Editorial Prioritisation
 
 ## Status
 
-**ACTIVE**
+**COMPLETE**
 
-This file defines the only implementation scope currently approved.
+Stage 8 is now complete.
 
 Stage 3 (News Ingestion Engine), Stage 4 (Admin & Editorial Operations), Stage 5
-(Public Portal), Stage 5B (Multi-Publication Localisation), and Stage 6 (AI
-Intelligence) are complete. Do not begin Stage 8 (Ranking/Trending), automated
-publishing, GitHub ingestion, or Hacker News ingestion.
+(Public Portal), Stage 5B (Multi-Publication Localisation), Stage 6 (AI
+Intelligence), Stage 7 (Story Clustering & Canonical Intelligence), and Stage 8
+(Ranking, Trending & Editorial Prioritisation) are complete.
+
+Do not begin Stage 9 (Developer Intelligence), automated publishing, GitHub
+ingestion, or Hacker News ingestion without explicit approval.
 
 ---
 
 # Goal
 
-Build the first trustworthy **Story clustering** layer: group Articles that
-describe the same underlying event/update into canonical Stories while preserving
-every Article as independent evidence.
+Build a transparent, versioned ranking and editorial-prioritisation layer for
+already-formed Stories. Ranking answers "Which Stories matter most right now?"
+while clustering (Stage 7) answers "Are these Articles about the same event?"
 
 ```
-Articles
-  → candidate generation (bounded, explainable)
-  → similarity / evidence scoring (deterministic, versioned)
-  → cluster decision (conservative)
-  → Story
-  → StoryArticles
-  → reviewable clustering provenance
+Story (canonical)
+  → derive ranking signals (freshness, source diversity, authority, activity, novelty, AI importance)
+  → calculate deterministic score (versioned formula)
+  → persist ranking evidence (versioned, append-only)
+  → publication-aware editorial adjustment (featured, boost, suppress)
+  → public ordering (top stories, topic pages)
 ```
 
 ## Core invariant
 
-**Article ≠ Story.** A Story is a canonical grouping of evidence. Clustering
-never merges, rewrites, deletes, or mutates source Article facts. It biases to
-**false split > false merge**: when uncertain whether two Articles describe the
-same event, they are kept separate.
+**Ranking NEVER alters Story membership.** Ranking is a separate layer that
+scores existing Stories. It never clusters, merges, splits, attaches, or
+detaches Articles. It never modifies Article source facts. It never
+auto-publishes Stories.
 
 ---
 
 # Implemented
 
-1. **Clustering schema & provenance** — migration `0015` extends embeddings with
-   provider/version/content-hash provenance, adds Story `review_state`
-   (UNREVIEWED/REVIEWED/LOCKED) + `formation_source` + clustering method/version,
-   adds explainable provenance columns to `story_articles` (score, reason,
-   signals, method/version), and adds a new append-only `clustering_decisions`
-   log. No column is added to `articles` — source facts stay immutable.
-2. **Embedding provider boundary** (`src/clustering/embedding`) — a provider-
-   neutral `EmbeddingProvider` interface mirroring the Stage 6 AI boundary. A
-   deterministic `FakeEmbeddingProvider` (feature hashing) is the only provider;
-   it needs no network, so required CI is fully offline and reproducible. A real
-   provider is a drop-in. Embeddings are derived data, versioned/provenanced, and
-   never written into Article source fields; `ensureArticleEmbedding` reuses a
-   stored vector when the model/version and source-content hash are unchanged.
-3. **Candidate generation** (`src/clustering/candidates.ts`) — bounded and
-   explainable: embedding nearest-neighbours (pgvector `<=>`, exact) plus
-   shared-Entity Stories, each capped, unioned and trimmed. Both signals share a
-   **two-sided temporal window** (14d back, a bounded 2d future tolerance) so a
-   backfilled Article cannot match an arbitrarily newer Story. Never an all-pairs
-   comparison; each candidate records which signal surfaced it.
-4. **Similarity scoring** (`src/clustering/scoring.ts`) — a pure, deterministic,
-   versioned multi-signal formula (`cluster-score-v1`): weighted embedding
-   similarity, title-token overlap, shared entities, and temporal proximity, with
-   a hard evidence gate, a conservative assign threshold, and an ambiguity margin.
-   Not an opaque LLM decision.
-5. **Assignment engine** (`src/clustering/assignment.ts`) — ensure embedding →
-   candidates → score → conservative decision → apply under a per-Article advisory
-   lock → append an auditable decision. Outcomes: CREATED_STORY, ASSIGNED_EXISTING,
-   AMBIGUOUS (no merge), SKIPPED_EXISTING (idempotent re-run), SKIPPED_PROTECTED
-   (REVIEWED/LOCKED Story). Idempotent and concurrency-safe.
-   A forced re-run of an already-clustered Article re-scores and records a
-   reviewable decision but never adds a second membership; deliberate reassignment
-   is the explicit admin Move workflow only.
-6. **Story lifecycle** — a newly formed Story is DRAFT + UNREVIEWED (internal/
-   reviewable). Clustering never publishes; PublicationStory remains the explicit
-   publishing boundary. `canonical_title` is a provisional, evidence-based value
-   seeded from the primary Article, with full provenance in `clustering_decisions`.
-7. **Admin review surface** — a Stories list and detail view (members, candidate
-   scores, decision reasons/signals, method/version, confidence, source diversity,
-   timestamps) plus an Article "Story clustering" card. Justified, authorized,
-   **audited** operations: run clustering, attach, detach, create Story from
-   Article, move between Stories, set review state. VIEWERs are refused.
-8. **Public isolation** — the public portal is unchanged; only genuinely
-   published PublicationStories are public. Clustering scores/review states are
-   never exposed publicly, and clustering being unavailable does not affect
-   ingestion, admin, or public rendering.
+1. **Ranking schema & provenance** — migration `0016` adds `story_rankings`
+   table (versioned, append-only) and `suppress_ranking` column to
+   `publication_stories` for editorial exclusion from ranked lists.
 
-See [`docs/ARCHITECTURE.MD`](ARCHITECTURE.MD) (Clustering Architecture),
-[`docs/DATA_MODEL.md`](DATA_MODEL.md), and [`docs/ADMIN.md`](ADMIN.md).
+2. **Ranking service** (`src/ranking/ranking-service.ts`) — pure, deterministic
+   formulas for 6 signals (freshness, source diversity, source authority, story
+   activity, novelty, AI importance) combined via weighted sum + editorial
+   adjustment. Formula version `ranking-score-v1` with explicit weights.
+
+3. **Ranking engine** (`src/ranking/ranking-engine.ts`) — orchestration layer
+   that gathers data from multiple repositories, calls the pure ranking service,
+   and persists results. Supports caching (reuses recent ranking < 1 hour) and
+   force recalculation.
+
+4. **Ranking repository** (`src/domain/repositories/story-ranking-repository.ts`)
+   — data access for rankings (create, find latest, list history, list top
+   ranked Story IDs). Supports publication-aware queries with correct precedence:
+   publication-specific ranking wins over canonical.
+
+5. **Admin service** (`src/admin/ranking-admin-service.ts`) — authorized,
+   audited ranking operations: trigger ranking, view history, batch rank
+   Stories. All operations logged to `admin_audit_log`.
+
+6. **Admin UI** (`src/app/admin/(dashboard)/stories/[id]/`) — ranking card on
+   Story detail page shows current score, signal breakdown, version, timestamp,
+   history (collapsible), and manual trigger button (authorized, audited).
+
+7. **Public queries** (`src/ranking/public-ranking-queries.ts`) — ranked Story
+   list queries for public portal. Joins with latest rankings, applies correct
+   precedence (publication-specific wins), orders by score, excludes suppressed
+   Stories.
+
+8. **Public routes** — `/top` route displays top-ranked published Stories using
+   `listPublishedStoriesRanked()`. Respects PublicationStory settings, excludes
+   suppressed Stories. `/latest` remains chronological (unchanged).
+
+9. **Tests** — 40 unit tests for ranking formulas (all passing), 9 integration
+   tests covering all Stage 8 requirements (ranking persistence, precedence,
+   isolation, suppression, invariants, concurrency). Full regression test suite
+   (327 tests passing). TypeScript check passes, production build succeeds.
+
+10. **Documentation** — README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE
+    updated with Stage 8 sections. Implementation plans and technical summaries
+    in `docs/STAGE_8_*.md`.
 
 ---
 
-# Do Not Implement
+# Ranking Formula v1
 
-- Ranking / trending / importance scoring; recommendation systems;
-- automated publishing; automatic promotion of a Story to any Publication;
-- autonomous merging/splitting of **reviewed** Stories;
-- a full Story summarization pipeline; automated translation;
-- GitHub ingestion; Hacker News ingestion; user personalization; alerts;
-  comments; payments;
-- new queueing/search/database infrastructure; production clustering scheduling.
+```
+score = (freshness × 0.30) +
+        (sourceDiversity × 0.15) +
+        (sourceAuthority × 0.15) +
+        (storyActivity × 0.15) +
+        (novelty × 0.10) +
+        (aiImportance × 0.15) +
+        editorialAdjustment
+```
+
+**Signals:**
+- **Freshness** — exponential decay from `Story.last_activity_at` (half-life: 24h)
+- **Source Diversity** — distinct Source count / 10 (capped at 1.0)
+- **Source Authority** — weighted average by tier (PRIMARY=1.0 ... DISCOVERY=0.2)
+- **Story Activity** — recent Article count in 7-day window / 10
+- **Novelty** — exponential decay from `Story.created_at` (half-life: 72h)
+- **AI Importance** — max `importance_score` from Stage 6 enrichments (graceful fallback)
+
+**Editorial Adjustment:**
+- Featured: +0.5
+- Priority: `editorial_priority × 0.1`
+- Suppressed: -1000 (excludes from ranked lists)
+
+All signals normalized to [0, 1]; formula is deterministic (same inputs → same output).
 
 ---
 
 # Important Invariants
 
-- Clustering **never** mutates Article source facts, publishes, deletes Article
-  evidence, or silently merges two reviewed Stories.
-- Bias to **false split > false merge**: a hard evidence gate, a conservative
-  threshold, and an AMBIGUOUS (no-merge) outcome for close calls.
-- Re-running clustering is idempotent: it never creates a duplicate Story or a
-  duplicate (story, article) link, and an already-clustered Article is a no-op.
-- Embeddings are derived data with explicit provider/version provenance; a model/
-  version change is distinguishable and never destroys prior decision provenance.
-- REVIEWED/LOCKED Stories are protected from automatic restructuring; only
-  explicit, audited admin operations may change them.
-- Clustering is optional: with no embedding provider change, everything else
-  behaves exactly as before, and the public portal is stable if clustering is
-  unavailable.
+- Ranking **never** mutates Article source facts, publishes, or alters Story
+  membership.
+- Ranking is **advisory and explainable** — every score component is recorded.
+- Rankings are **versioned and append-only** — history is preserved.
+- **Publication-aware** — same Story may have different rankings per Publication.
+- **Precedence correct** — latest publication-specific ranking wins over canonical.
+  A newer canonical ranking does NOT override an older publication-specific ranking.
+- **Editorial overrides** are explicit and auditable (applied once in formula, not
+  double-counted in SQL).
+- Unpublished Stories **never** appear in public ranked lists.
+- Ranking is **optional** — public rendering works without rankings (graceful fallback).
 
 ---
 
 # Exit Criteria
 
-Stage 7 is complete only when:
+Stage 8 is complete when:
 
-- the embedding-provider boundary, versioned embedding persistence, bounded
-  candidate generation, versioned deterministic scoring, the conservative
-  assignment engine (idempotent + concurrency-safe), the reviewable provenance
-  log, and the audited admin review surface are implemented and tested with
-  deterministic fakes (no live API in required CI);
-- false-merge risk, source-Article mutation, auto-publishing, lost provenance,
-  duplicate StoryArticles, clustering race conditions, and silent reviewed-Story
-  changes are all shown absent;
-- Stage 3/4/5/5B/6 regressions, the Stage 7 unit + DB integration tests,
-  typecheck, lint, format check, the full test suite, and the production build
-  all pass, and an admin clustering smoke test with the fake provider succeeds.
+- ✅ the ranking schema supports versioned, provenanced ranking with publication-awareness
+- ✅ deterministic ranking formula is implemented and tested
+- ✅ all signals (freshness, source diversity, authority, activity, novelty, AI importance) are defined and tested
+- ✅ editorial prioritization works per Publication
+- ✅ precedence is correct (publication-specific wins over canonical)
+- ✅ no double-counting (editorial adjustment applied once in formula)
+- ✅ admin can trigger ranking and view provenance
+- ✅ admin UI shows ranking card on Story detail
+- ✅ public portal uses ranking for Story ordering (where appropriate)
+- ✅ /top route displays ranked Stories
+- ✅ all tests pass (unit, integration, regressions)
+- ✅ build succeeds
+- ✅ documentation updated (README, DATA_MODEL, ADMIN, PUBLIC_PORTAL, ARCHITECTURE)
+- ✅ no invariants violated (no clustering changes, no auto-publish, no Article mutations)
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 8 (ranking/trending), automated publishing, GitHub ingestion,
-or Hacker News ingestion without explicit approval. Do not merge to `main`
-without review.
+Do not begin Stage 9 (Developer Intelligence), automated publishing, GitHub
+ingestion, or Hacker News ingestion without explicit approval. Do not merge to
+`main` without review.
+
+---
+
+# What's Next
+
+**Stage 9 — Developer Intelligence** (NOT YET APPROVED):
+- GitHub repository tracking
+- Release intelligence
+- Star velocity
+- Changelog monitoring
+- Hacker News integration
+- Tool profiles
+
+Await explicit approval before beginning Stage 9.

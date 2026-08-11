@@ -18,6 +18,35 @@ architecture definitions.
 
 ## Current stage
 
+**Stage 8 — Ranking, Trending & Editorial Prioritisation.**
+
+On top of the Stage 3 ingestion engine, Stage 4 admin, Stage 5 public portal,
+Stage 5B localisation, Stage 6 AI intelligence, and Stage 7 Story clustering,
+Stage 8 adds transparent, versioned ranking that answers "Which Stories matter
+most right now?" through deterministic, explainable scoring.
+
+### Stage 8: Ranking system
+
+- **Transparent ranking** — 6 deterministic signals (freshness, source diversity,
+  authority, story activity, novelty, AI importance) + editorial adjustment,
+  combined via weighted sum with explicit version control (`ranking-score-v1`).
+- **Publication-aware** — same Story may rank differently per Publication;
+  editorial overrides (featured, priority, suppression) are per-publication.
+- **Append-only provenance** — every ranking calculation is versioned and
+  timestamped in `story_rankings`; history is preserved, never overwritten.
+- **Admin ranking UI** — Story detail page shows current ranking score, signal
+  breakdown, version, timestamp, history, and manual trigger (authorized,
+  audited via `AdminRankingService`).
+- **Public integration** — `/top` route displays top-ranked published Stories;
+  ranking queries respect PublicationStory settings and exclude suppressed
+  Stories.
+- **Invariants preserved** — ranking never alters Story membership, Article
+  source facts, or auto-publishes Stories. Ranking is advisory and explainable.
+
+---
+
+### Previously: Stage 7 — Story Clustering
+
 **Stage 7 — Story Clustering & Canonical Intelligence.**
 
 On top of the Stage 3 ingestion engine, Stage 4 admin, the Stage 5 public portal,

@@ -11,6 +11,7 @@ export interface PublicationStoryInput {
   publishedWhyItMatters: string | null;
   featured: boolean;
   editorialPriority: number;
+  suppressRanking: boolean;
 }
 
 /** A PublicationStory joined with the canonical Story it presents (admin view). */
@@ -96,8 +97,8 @@ export class PublicationStoryRepository {
       `INSERT INTO publication_stories
          (publication_id, story_id, slug, headline,
           published_summary, published_why_it_matters,
-          featured, editorial_priority)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          featured, editorial_priority, suppress_ranking)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         publicationId,
@@ -108,6 +109,7 @@ export class PublicationStoryRepository {
         values.publishedWhyItMatters,
         values.featured,
         values.editorialPriority,
+        values.suppressRanking,
       ],
     );
     return result.rows[0] as PublicationStoryRow;
@@ -125,7 +127,8 @@ export class PublicationStoryRepository {
          published_summary        = $4,
          published_why_it_matters = $5,
          featured                 = $6,
-         editorial_priority       = $7
+         editorial_priority       = $7,
+         suppress_ranking         = $8
        WHERE id = $1
        RETURNING *`,
       [
@@ -136,6 +139,7 @@ export class PublicationStoryRepository {
         values.publishedWhyItMatters,
         values.featured,
         values.editorialPriority,
+        values.suppressRanking,
       ],
     );
     return result.rows[0] ?? null;

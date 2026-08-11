@@ -248,3 +248,42 @@ of the `<script>` element.
 - `tests/public/localization.integration.test.ts` — DB-gated: public locale
   fallback, PUBLISHED-only localisation visibility, and no cross-Publication
   leakage.
+
+---
+
+## Stage 8: Ranked Story Ordering
+
+### Top Stories Route
+
+`/top` displays published Stories ordered by ranking score:
+- Uses `listPublishedStoriesRanked()` query
+- Joins with latest `story_rankings` per Story
+- Prefers publication-specific ranking over canonical
+- Orders by `calculated_score DESC` (editorial adjustment already applied)
+- Excludes Stories with `suppress_ranking = true`
+- Only shows `PUBLISHED` PublicationStories
+- Displays ranking score and featured badge
+
+### Ranking Precedence
+
+Latest **publication-specific** ranking wins over canonical:
+```sql
+ORDER BY story_id,
+         (publication_id = $1) DESC,  -- Prefer publication-specific
+         calculated_at DESC
+```
+
+A newer canonical ranking does NOT override an older publication-specific ranking.
+
+### Editorial Controls
+
+- `featured`: Visual badge + boost applied in ranking formula
+- `editorial_priority`: Scaled boost applied in ranking formula
+- `suppress_ranking`: Excludes Story from `/top` and ranked lists (detail page still accessible)
+
+### /latest Route
+
+Remains **chronological** (unchanged). Lists Articles by `published_at DESC` or `discovered_at DESC`. Not affected by ranking.
+
+---
+

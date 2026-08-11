@@ -398,3 +398,77 @@ Do not introduce during MVP without explicit approval:
 - a second backend language;
 - Elasticsearch;
 - arbitrary crawler infrastructure.
+
+---
+
+## Stage 8: Ranking Layer
+
+### Architecture
+
+Ranking is a separate layer that scores formed Stories. It never alters Story membership, Article source facts, or auto-publishes.
+
+```
+Story (canonical)
+  ↓
+Ranking Service (pure formulas)
+  ↓
+Ranking Engine (orchestration)
+  ↓
+story_rankings (append-only)
+  ↓
+Public queries (publication-aware)
+  ↓
+/top route
+```
+
+### Components
+
+- **RankingService** (`src/ranking/ranking-service.ts`): Pure, deterministic formulas. 6 signals + editorial adjustment. Versioned config (`RANKING_CONFIG_V1`).
+- **RankingEngine** (`src/ranking/ranking-engine.ts`): Orchestration. Gathers data, calls service, persists results. Caching (1-hour window).
+- **StoryRankingRepository** (`src/domain/repositories/story-ranking-repository.ts`): Data access. Append-only writes, latest-per-story queries, history retrieval.
+- **AdminRankingService** (`src/admin/ranking-admin-service.ts`): Authorized operations. Manual trigger, history review, audit logging.
+- **Public queries** (`src/ranking/public-ranking-queries.ts`): Ranked Story lists for public portal. Publication-aware precedence.
+
+### Ranking Formula v1
+
+```
+score = (freshness × 0.30) +
+        (sourceDiversity × 0.15) +
+        (sourceAuthority × 0.15) +
+        (storyActivity × 0.15) +
+        (novelty × 0.10) +
+        (aiImportance × 0.15) +
+        editorialAdjustment
+```
+
+**Signals:**
+- Freshness: exponential decay from last_activity_at (24h half-life)
+- Source Diversity: distinct source count / 10
+- Source Authority: weighted by tier (PRIMARY=1.0 ... DISCOVERY=0.2)
+- Story Activity: recent articles in 7-day window / 10
+- Novelty: exponential decay from story creation (72h half-life)
+- AI Importance: max importance_score from enrichments (graceful fallback)
+- Editorial Adjustment: featured (+0.5) + priority (×0.1) + suppress (-1000)
+
+All signals normalized to [0,1]. Formula is deterministic (same inputs → same output).
+
+### Publication-Aware Ranking
+
+- Same Story may have different rankings per Publication
+- Latest publication-specific ranking wins over canonical
+- Newer canonical does NOT override older publication-specific
+- Editorial controls (`featured`, `editorial_priority`, `suppress_ranking`) are per-publication
+
+### Caching
+
+RankingEngine reuses recent rankings (< 1 hour, same version). Force flag bypasses cache.
+
+### Invariants
+
+- Ranking never mutates Story membership (no clustering changes)
+- Ranking never mutates Article source facts
+- Ranking never auto-publishes Stories
+- Ranking is advisory and explainable (all signals recorded)
+
+---
+
