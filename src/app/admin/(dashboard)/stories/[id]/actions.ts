@@ -91,12 +91,7 @@ export async function triggerRankingAction(
 
   try {
     const rankingService = new AdminRankingService(getPool());
-    await rankingService.triggerRanking(
-      actor,
-      storyId,
-      publicationId,
-      force,
-    );
+    await rankingService.triggerRanking(actor, storyId, publicationId, force);
   } catch (error) {
     return toActionState(error);
   }

@@ -171,7 +171,8 @@ export default async function StoryDetailPage({
                     {currentRanking.calculated_score.toFixed(3)}
                   </div>
                   <div className="text-xs text-neutral-500">
-                    {currentRanking.ranking_method}/{currentRanking.ranking_version} ·{' '}
+                    {currentRanking.ranking_method}/
+                    {currentRanking.ranking_version} ·{' '}
                     {formatTimestamp(currentRanking.calculated_at)}
                   </div>
                 </div>
@@ -179,23 +180,33 @@ export default async function StoryDetailPage({
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Freshness</span>
-                    <span className="font-mono">{currentRanking.signals.freshness.toFixed(2)}</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.freshness.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Source Diversity</span>
-                    <span className="font-mono">{currentRanking.signals.sourceDiversity.toFixed(2)}</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.sourceDiversity.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Source Authority</span>
-                    <span className="font-mono">{currentRanking.signals.sourceAuthority.toFixed(2)}</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.sourceAuthority.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Story Activity</span>
-                    <span className="font-mono">{currentRanking.signals.storyActivity.toFixed(2)}</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.storyActivity.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Novelty</span>
-                    <span className="font-mono">{currentRanking.signals.novelty.toFixed(2)}</span>
+                    <span className="font-mono">
+                      {currentRanking.signals.novelty.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">AI Importance</span>
@@ -208,7 +219,9 @@ export default async function StoryDetailPage({
                   <div className="flex justify-between border-t border-neutral-200 pt-1 dark:border-neutral-800">
                     <span className="text-neutral-500">Editorial Adj.</span>
                     <span className="font-mono">
-                      {currentRanking.signals.editorialAdjustment >= 0 ? '+' : ''}
+                      {currentRanking.signals.editorialAdjustment >= 0
+                        ? '+'
+                        : ''}
                       {currentRanking.signals.editorialAdjustment.toFixed(2)}
                     </span>
                   </div>

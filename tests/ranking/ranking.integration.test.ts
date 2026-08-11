@@ -59,7 +59,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
 
   it.skip('publication-specific ranking wins over canonical', async () => {
     await withTransaction(async (db: Db) => {
-      const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-precedence');
+      const { storyId, pubAId, pubBId } = await setupTwoPublications(
+        db,
+        'pub-precedence',
+      );
       const rankingRepo = new StoryRankingRepository(db);
       const engine = new RankingEngine(db);
 
@@ -86,7 +89,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
 
   it('newer canonical does not override publication-specific', async () => {
     await withTransaction(async (db: Db) => {
-      const { storyId, pubAId } = await setupTwoPublications(db, 'canonical-no-override');
+      const { storyId, pubAId } = await setupTwoPublications(
+        db,
+        'canonical-no-override',
+      );
       const rankingRepo = new StoryRankingRepository(db);
       const engine = new RankingEngine(db);
 
@@ -107,7 +113,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
 
   it('publication A and B rankings are isolated', async () => {
     await withTransaction(async (db: Db) => {
-      const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-isolation');
+      const { storyId, pubAId, pubBId } = await setupTwoPublications(
+        db,
+        'pub-isolation',
+      );
       const rankingRepo = new StoryRankingRepository(db);
       const engine = new RankingEngine(db);
 
@@ -120,7 +129,9 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
       const rankingB = await engine.rankStory(storyId, pubBId, true);
 
       // Scores differ due to editorial context
-      expect(rankingA.calculated_score).toBeGreaterThan(rankingB.calculated_score);
+      expect(rankingA.calculated_score).toBeGreaterThan(
+        rankingB.calculated_score,
+      );
       expect(rankingA.signals.editorialAdjustment).toBeGreaterThan(0);
       expect(rankingB.signals.editorialAdjustment).toBe(0);
 
@@ -177,7 +188,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
 
   it('ranking does not mutate Story membership', async () => {
     await withTransaction(async (db: Db) => {
-      const { storyId, articleId } = await setupStory(db, 'no-mutation-membership');
+      const { storyId, articleId } = await setupStory(
+        db,
+        'no-mutation-membership',
+      );
       const storyRepo = new StoryRepository(db);
       const engine = new RankingEngine(db);
 
@@ -193,7 +207,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
 
   it('ranking does not mutate Article source facts', async () => {
     await withTransaction(async (db: Db) => {
-      const { articleId, storyId } = await setupStory(db, 'no-mutation-article');
+      const { articleId, storyId } = await setupStory(
+        db,
+        'no-mutation-article',
+      );
       const articleRepo = new ArticleRepository(db);
       const engine = new RankingEngine(db);
 
@@ -228,7 +245,9 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Integration', () => {
       });
 
       // Multiple versions created
-      const history = await new StoryRankingRepository(db).listHistoryForStory(storyId);
+      const history = await new StoryRankingRepository(db).listHistoryForStory(
+        storyId,
+      );
       expect(history.length).toBeGreaterThanOrEqual(5);
     }, getPool());
   });
@@ -322,7 +341,11 @@ async function attachStoryToPublication(
   });
 }
 
-async function publishStory(db: Db, storyId: string, publicationId: string): Promise<void> {
+async function publishStory(
+  db: Db,
+  storyId: string,
+  publicationId: string,
+): Promise<void> {
   const psRepo = new PublicationStoryRepository(db);
   const ps = await psRepo.findByPublicationAndStory(publicationId, storyId);
   if (ps) {
@@ -330,7 +353,11 @@ async function publishStory(db: Db, storyId: string, publicationId: string): Pro
   }
 }
 
-async function suppressStory(db: Db, storyId: string, publicationId: string): Promise<void> {
+async function suppressStory(
+  db: Db,
+  storyId: string,
+  publicationId: string,
+): Promise<void> {
   const psRepo = new PublicationStoryRepository(db);
   const ps = await psRepo.findByPublicationAndStory(publicationId, storyId);
   if (ps) {

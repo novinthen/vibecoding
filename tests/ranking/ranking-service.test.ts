@@ -16,7 +16,10 @@ import {
 
 describe('Ranking Service — Pure Formulas', () => {
   describe('calculateFreshnessScore', () => {
-    const config: RankingConfig = { ...RANKING_CONFIG_V1, freshnessHalfLifeHours: 24 };
+    const config: RankingConfig = {
+      ...RANKING_CONFIG_V1,
+      freshnessHalfLifeHours: 24,
+    };
     const now = new Date('2024-01-10T12:00:00Z');
 
     it('returns 1.0 for current timestamp', () => {
@@ -49,7 +52,10 @@ describe('Ranking Service — Pure Formulas', () => {
   });
 
   describe('calculateSourceDiversityScore', () => {
-    const config: RankingConfig = { ...RANKING_CONFIG_V1, maxExpectedSources: 10 };
+    const config: RankingConfig = {
+      ...RANKING_CONFIG_V1,
+      maxExpectedSources: 10,
+    };
 
     it('returns 0.0 for zero sources', () => {
       expect(calculateSourceDiversityScore(0, config)).toBe(0.0);
@@ -115,7 +121,10 @@ describe('Ranking Service — Pure Formulas', () => {
   });
 
   describe('calculateStoryActivityScore', () => {
-    const config: RankingConfig = { ...RANKING_CONFIG_V1, activityWindowHours: 168 }; // 7 days
+    const config: RankingConfig = {
+      ...RANKING_CONFIG_V1,
+      activityWindowHours: 168,
+    }; // 7 days
     const now = new Date('2024-01-10T12:00:00Z');
 
     it('returns 0.0 for no articles', () => {
@@ -169,7 +178,10 @@ describe('Ranking Service — Pure Formulas', () => {
   });
 
   describe('calculateNoveltyScore', () => {
-    const config: RankingConfig = { ...RANKING_CONFIG_V1, noveltyHalfLifeHours: 72 }; // 3 days
+    const config: RankingConfig = {
+      ...RANKING_CONFIG_V1,
+      noveltyHalfLifeHours: 72,
+    }; // 3 days
     const now = new Date('2024-01-10T12:00:00Z');
 
     it('returns 1.0 for just-created story', () => {

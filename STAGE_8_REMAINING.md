@@ -3,6 +3,7 @@
 ## Status: IN PROGRESS
 
 ### ✅ Completed
+
 1. Core ranking service (deterministic formulas)
 2. Ranking engine (orchestration)
 3. Repository layer
@@ -17,18 +18,21 @@
 ### 🚧 Remaining
 
 #### 1. Admin UI (HIGH PRIORITY)
+
 - [ ] Story detail ranking card component
 - [ ] Display: score, signals, version, timestamp, history
 - [ ] Manual trigger button (authorized)
 - [ ] Edit PublicationStory controls (featured, priority, suppress)
 
 #### 2. Public Route Integration (HIGH PRIORITY)
+
 - [ ] Wire ranking into homepage (top stories section)
 - [ ] Wire ranking into topic pages
 - [ ] Add /top route (not "trending")
 - [ ] Keep /latest chronological
 
 #### 3. Documentation Updates (CRITICAL)
+
 - [ ] README.md
 - [ ] docs/DATA_MODEL.md
 - [ ] docs/ADMIN.md
@@ -38,6 +42,7 @@
 - [ ] docs/CURRENT_STAGE.md (final)
 
 #### 4. Validation
+
 - [ ] Run full test suite
 - [ ] Run typecheck
 - [ ] Run build
@@ -45,13 +50,15 @@
 - [ ] Two-publication smoke test (if DB available)
 
 ## Time Estimate
+
 - Admin UI: ~30 min
 - Public routes: ~20 min
 - Documentation: ~40 min
 - Validation: ~20 min
-Total: ~2 hours
+  Total: ~2 hours
 
 ## Next Steps
+
 1. Create admin UI ranking card
 2. Integrate public routes
 3. Update all documentation

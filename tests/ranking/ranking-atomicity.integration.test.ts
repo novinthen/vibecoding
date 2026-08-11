@@ -58,7 +58,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
 
     // Count before
     const rankingsBefore = await rankingRepoOuter.listHistoryForStory(storyId);
-    const auditsBefore = await auditRepoOuter.listRecent({ targetType: 'story', targetId: storyId });
+    const auditsBefore = await auditRepoOuter.listRecent({
+      targetType: 'story',
+      targetId: storyId,
+    });
 
     const beforeRankingCount = rankingsBefore.length;
     const beforeAuditCount = auditsBefore.length;
@@ -69,7 +72,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
 
     // Count after
     const rankingsAfter = await rankingRepoOuter.listHistoryForStory(storyId);
-    const auditsAfter = await auditRepoOuter.listRecent({ targetType: 'story', targetId: storyId });
+    const auditsAfter = await auditRepoOuter.listRecent({
+      targetType: 'story',
+      targetId: storyId,
+    });
 
     // Both were created
     expect(rankingsAfter.length).toBe(beforeRankingCount + 1);
@@ -89,7 +95,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
 
     // Cleanup
     await db.query('DELETE FROM story_rankings WHERE story_id = $1', [storyId]);
-    await db.query('DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2', ['story', storyId]);
+    await db.query(
+      'DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2',
+      ['story', storyId],
+    );
     await db.query('DELETE FROM story_articles WHERE story_id = $1', [storyId]);
     await db.query('DELETE FROM stories WHERE id = $1', [storyId]);
   });
@@ -180,12 +189,18 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
     const auditRepo = new AdminAuditLogRepository(db);
 
     const rankingsBefore = await rankingRepo.listHistoryForStory(storyId);
-    const auditsBefore = await auditRepo.listRecent({ targetType: 'story', targetId: storyId });
+    const auditsBefore = await auditRepo.listRecent({
+      targetType: 'story',
+      targetId: storyId,
+    });
 
     const ranking = await service.triggerRanking(ADMIN, storyId, null, true);
 
     const rankingsAfter = await rankingRepo.listHistoryForStory(storyId);
-    const auditsAfter = await auditRepo.listRecent({ targetType: 'story', targetId: storyId });
+    const auditsAfter = await auditRepo.listRecent({
+      targetType: 'story',
+      targetId: storyId,
+    });
 
     // Both created
     expect(rankingsAfter.length).toBe(rankingsBefore.length + 1);
@@ -194,7 +209,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking + Audit Atomicity', () => {
 
     // Cleanup
     await db.query('DELETE FROM story_rankings WHERE story_id = $1', [storyId]);
-    await db.query('DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2', ['story', storyId]);
+    await db.query(
+      'DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2',
+      ['story', storyId],
+    );
     await db.query('DELETE FROM story_articles WHERE story_id = $1', [storyId]);
     await db.query('DELETE FROM stories WHERE id = $1', [storyId]);
   });

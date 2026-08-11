@@ -60,10 +60,7 @@ export function calculateStoryRanking(
     config,
   );
 
-  const sourceAuthority = calculateSourceAuthorityScore(
-    input.sources,
-    config,
-  );
+  const sourceAuthority = calculateSourceAuthorityScore(input.sources, config);
 
   const storyActivity = calculateStoryActivityScore(
     input.articles,
@@ -126,7 +123,8 @@ export function calculateFreshnessScore(
 ): number {
   if (!lastActivityAt) return 0.0;
 
-  const hoursElapsed = (now.getTime() - lastActivityAt.getTime()) / (1000 * 60 * 60);
+  const hoursElapsed =
+    (now.getTime() - lastActivityAt.getTime()) / (1000 * 60 * 60);
   if (hoursElapsed < 0) return 1.0; // Future timestamp (clock skew): treat as fresh
 
   const score = Math.pow(0.5, hoursElapsed / config.freshnessHalfLifeHours);
@@ -195,7 +193,8 @@ export function calculateNoveltyScore(
   now: Date,
   config: RankingConfig,
 ): number {
-  const hoursElapsed = (now.getTime() - storyCreatedAt.getTime()) / (1000 * 60 * 60);
+  const hoursElapsed =
+    (now.getTime() - storyCreatedAt.getTime()) / (1000 * 60 * 60);
   if (hoursElapsed < 0) return 1.0; // Future timestamp: treat as novel
 
   const score = Math.pow(0.5, hoursElapsed / config.noveltyHalfLifeHours);
@@ -233,11 +232,14 @@ export function calculateAiImportanceScore(
  * suppress_ranking returns a large negative penalty (effectively excludes from ranked lists).
  */
 export function calculateEditorialAdjustment(
-  publicationContext: {
-    featured: boolean;
-    editorialPriority: number;
-    suppressRanking: boolean;
-  } | null | undefined,
+  publicationContext:
+    | {
+        featured: boolean;
+        editorialPriority: number;
+        suppressRanking: boolean;
+      }
+    | null
+    | undefined,
   config: RankingConfig,
 ): number {
   if (!publicationContext) return 0.0;
@@ -249,7 +251,8 @@ export function calculateEditorialAdjustment(
   let adjustment = 0.0;
 
   // Scale editorial priority
-  adjustment += publicationContext.editorialPriority * config.editorialPriorityScale;
+  adjustment +=
+    publicationContext.editorialPriority * config.editorialPriorityScale;
 
   // Featured boost
   if (publicationContext.featured) {
@@ -263,9 +266,7 @@ export function calculateEditorialAdjustment(
  * Count distinct Sources across Articles (for source diversity).
  * Defends against duplicate same-Source Articles inflating diversity.
  */
-function countDistinctSources(
-  articles: Array<{ sourceId: string }>,
-): number {
+function countDistinctSources(articles: Array<{ sourceId: string }>): number {
   const uniqueSources = new Set(articles.map((a) => a.sourceId));
   return uniqueSources.size;
 }
@@ -323,11 +324,15 @@ function buildExplanation(
       `AI importance: ${signals.aiImportance.toFixed(2)} (weight: ${config.weights.aiImportance})`,
     );
   } else {
-    parts.push(`AI importance: unavailable (weight: ${config.weights.aiImportance})`);
+    parts.push(
+      `AI importance: unavailable (weight: ${config.weights.aiImportance})`,
+    );
   }
 
   if (signals.editorialAdjustment !== 0) {
-    parts.push(`Editorial adjustment: ${signals.editorialAdjustment >= 0 ? '+' : ''}${signals.editorialAdjustment.toFixed(2)}`);
+    parts.push(
+      `Editorial adjustment: ${signals.editorialAdjustment >= 0 ? '+' : ''}${signals.editorialAdjustment.toFixed(2)}`,
+    );
   }
 
   parts.push(`Final score: ${finalScore.toFixed(3)}`);

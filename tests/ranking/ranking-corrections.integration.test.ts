@@ -52,7 +52,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
 
   it('publication-specific ranking beats newer canonical in public query', async () => {
     const db = getPool();
-    const { storyId, pubAId } = await setupTwoPublications(db, 'pub-precedence-public');
+    const { storyId, pubAId } = await setupTwoPublications(
+      db,
+      'pub-precedence-public',
+    );
 
     try {
       const engine = new RankingEngine(db);
@@ -77,7 +80,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
 
   it('canonical ranking used when publication-specific does not exist', async () => {
     const db = getPool();
-    const { storyId, pubAId } = await setupTwoPublications(db, 'canonical-fallback');
+    const { storyId, pubAId } = await setupTwoPublications(
+      db,
+      'canonical-fallback',
+    );
 
     try {
       const engine = new RankingEngine(db);
@@ -98,7 +104,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
 
   it('publication B never receives publication A ranking', async () => {
     const db = getPool();
-    const { storyId, pubAId, pubBId } = await setupTwoPublications(db, 'pub-isolation');
+    const { storyId, pubAId, pubBId } = await setupTwoPublications(
+      db,
+      'pub-isolation',
+    );
 
     try {
       const engine = new RankingEngine(db);
@@ -175,7 +184,10 @@ describe.skipIf(!hasDb)('Stage 8 Ranking Corrections', () => {
 
   it('unpublished story never appears in /top', async () => {
     const db = getPool();
-    const { storyId, pubAId } = await setupTwoPublications(db, 'unpublished-exclude');
+    const { storyId, pubAId } = await setupTwoPublications(
+      db,
+      'unpublished-exclude',
+    );
 
     try {
       const engine = new RankingEngine(db);
@@ -359,7 +371,11 @@ async function attachStoryToPublication(
   });
 }
 
-async function publishStory(db: Db, storyId: string, publicationId: string): Promise<void> {
+async function publishStory(
+  db: Db,
+  storyId: string,
+  publicationId: string,
+): Promise<void> {
   const psRepo = new PublicationStoryRepository(db);
   const ps = await psRepo.findByPublicationAndStory(publicationId, storyId);
   if (ps) {
@@ -367,7 +383,11 @@ async function publishStory(db: Db, storyId: string, publicationId: string): Pro
   }
 }
 
-async function suppressStory(db: Db, storyId: string, publicationId: string): Promise<void> {
+async function suppressStory(
+  db: Db,
+  storyId: string,
+  publicationId: string,
+): Promise<void> {
   const psRepo = new PublicationStoryRepository(db);
   const ps = await psRepo.findByPublicationAndStory(publicationId, storyId);
   if (ps) {
@@ -390,12 +410,24 @@ async function cleanupTest(
 ): Promise<void> {
   try {
     if (storyId) {
-      await db.query('DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2', ['story', storyId]);
-      await db.query('DELETE FROM story_rankings WHERE story_id = $1', [storyId]);
-      await db.query('DELETE FROM publication_stories WHERE story_id = $1', [storyId]);
-      await db.query('DELETE FROM story_articles WHERE story_id = $1', [storyId]);
+      await db.query(
+        'DELETE FROM admin_audit_log WHERE target_type = $1 AND target_id = $2',
+        ['story', storyId],
+      );
+      await db.query('DELETE FROM story_rankings WHERE story_id = $1', [
+        storyId,
+      ]);
+      await db.query('DELETE FROM publication_stories WHERE story_id = $1', [
+        storyId,
+      ]);
+      await db.query('DELETE FROM story_articles WHERE story_id = $1', [
+        storyId,
+      ]);
       await db.query('DELETE FROM stories WHERE id = $1', [storyId]);
-      await db.query('DELETE FROM articles WHERE id IN (SELECT article_id FROM story_articles WHERE story_id = $1)', [storyId]);
+      await db.query(
+        'DELETE FROM articles WHERE id IN (SELECT article_id FROM story_articles WHERE story_id = $1)',
+        [storyId],
+      );
     }
     for (const pubId of publicationIds) {
       if (pubId) {

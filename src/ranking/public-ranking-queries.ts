@@ -64,7 +64,9 @@ export async function listPublishedStoriesRanked(
   const clampedOffset = Math.max(Math.trunc(offset), 0);
 
   const result = await db.query<
-    Omit<PublishedStoryWithRanking, 'ranking_score'> & { ranking_score: string | null }
+    Omit<PublishedStoryWithRanking, 'ranking_score'> & {
+      ranking_score: string | null;
+    }
   >(
     `WITH latest_rankings AS (
        -- Get latest ranking per Story with correct precedence:
@@ -119,7 +121,8 @@ export async function listPublishedStoriesRanked(
 
   return result.rows.map((row) => ({
     ...row,
-    ranking_score: row.ranking_score !== null ? Number(row.ranking_score) : null,
+    ranking_score:
+      row.ranking_score !== null ? Number(row.ranking_score) : null,
   }));
 }
 
@@ -139,7 +142,9 @@ export async function listPublishedStoriesForTopicRanked(
   const clampedOffset = Math.max(Math.trunc(offset), 0);
 
   const result = await db.query<
-    Omit<PublishedStoryWithRanking, 'ranking_score'> & { ranking_score: string | null }
+    Omit<PublishedStoryWithRanking, 'ranking_score'> & {
+      ranking_score: string | null;
+    }
   >(
     `WITH latest_rankings AS (
        -- Same precedence as listPublishedStoriesRanked
@@ -192,7 +197,8 @@ export async function listPublishedStoriesForTopicRanked(
 
   return result.rows.map((row) => ({
     ...row,
-    ranking_score: row.ranking_score !== null ? Number(row.ranking_score) : null,
+    ranking_score:
+      row.ranking_score !== null ? Number(row.ranking_score) : null,
   }));
 }
 

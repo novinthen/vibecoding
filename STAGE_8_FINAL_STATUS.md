@@ -5,6 +5,7 @@
 ### ✅ Fully Implemented and Tested
 
 #### 1. Ranking Core (100% Complete)
+
 - **Migration 0016**: `story_rankings` table with full provenance
 - **Ranking Service**: 6 deterministic signals + editorial adjustment
 - **Ranking Engine**: Data gathering, calculation, caching, persistence
@@ -13,6 +14,7 @@
 - **Public Queries**: Ranked Story list queries with proper precedence
 
 #### 2. Ranking Formula (Tested & Working)
+
 ```
 score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%) +
         (storyActivity × 15%) + (novelty × 10%) + (aiImportance × 15%) +
@@ -23,11 +25,13 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 **Editorial**: Featured boost, priority scaling, suppression
 
 #### 3. Key Fixes Applied
+
 - ✅ Fixed ranking precedence: Publication-specific wins over canonical
 - ✅ Fixed double-counting: Editorial adjustment applied once in formula
 - ✅ Restored package-lock.json (no dependency changes)
 
 #### 4. Tests (100% Passing)
+
 - **40 unit tests**: All ranking formulas tested
 - **9 integration tests**: All Stage 8 requirements verified
   - Version history persistence
@@ -42,6 +46,7 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 - **327 regression tests**: All Stage 3-7 tests still passing
 
 #### 5. Code Quality
+
 - ✅ TypeScript check passes (no errors)
 - ✅ All invariants preserved (no clustering changes, no Article mutations, no auto-publishing)
 - ✅ Production build succeeds
@@ -49,7 +54,9 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 ### ⏳ Remaining Work (UI & Documentation)
 
 #### 1. Admin UI Components (Not Started)
+
 **Required:**
+
 - Admin Story detail ranking card
 - Display: current score, signals breakdown, version, timestamp
 - Ranking history view
@@ -60,7 +67,9 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 **Blockers:** Need to understand existing admin UI patterns
 
 #### 2. Public Route Integration (Not Started)
+
 **Required:**
+
 - Homepage top stories section (ranked)
 - Topic pages (ranked)
 - /top route (not "trending")
@@ -70,12 +79,15 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 **Blockers:** Need to locate existing route structure
 
 #### 3. Documentation Updates (Partial)
+
 **Completed:**
+
 - Implementation plan documents
 - Technical summaries
 - Completion reports
 
 **Remaining:**
+
 - README.md (Stage 8 section)
 - docs/DATA_MODEL.md (ranking schema)
 - docs/ADMIN.md (ranking workflows)
@@ -88,6 +100,7 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 ### 📊 Implementation Statistics
 
 **Files Created:** 13
+
 - 1 migration
 - 3 domain/repository files
 - 3 ranking service files
@@ -96,12 +109,14 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 - 3 documentation files
 
 **Files Modified:** 4
+
 - domain types
 - publication-story repository
-- publication-story service  
+- publication-story service
 - package-lock.json (restored)
 
 **Lines of Code:**
+
 - Core ranking: ~1,200 lines
 - Tests: ~770 lines
 - Total: ~2,000 lines
@@ -129,12 +144,14 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 ### 💡 Recommendation
 
 **Option A: Commit Core Implementation**
+
 - Current state is production-ready for backend
 - UI/routes can be added iteratively
 - All core functionality tested and working
 - Commit as "Stage 8 Core (backend complete, UI pending)"
 
 **Option B: Complete Full Stage 8**
+
 - Requires additional 4-6 hours for UI/routes/docs
 - Would need to understand existing admin UI patterns
 - Would need to locate and modify public route structure
@@ -143,6 +160,7 @@ score = (freshness × 30%) + (sourceDiversity × 15%) + (sourceAuthority × 15%)
 ### 📝 Next Steps if Continuing
 
 1. **Locate Admin UI Structure**
+
    ```bash
    find src/app -name "stories" -type d
    find src/app/admin -name "*.tsx"
@@ -180,7 +198,7 @@ Stage 8: Ranking core implementation (backend complete)
 Implemented:
 ✅ Transparent, versioned ranking system
 ✅ 6 deterministic signals + editorial adjustment
-✅ Publication-aware editorial prioritization  
+✅ Publication-aware editorial prioritization
 ✅ Proper precedence (publication-specific wins)
 ✅ No double-counting (editorial in formula only)
 ✅ Append-only provenance
@@ -211,6 +229,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 **Stage 8 core implementation is COMPLETE and PRODUCTION-READY.**
 
 The ranking system:
+
 - Calculates transparent, versioned scores ✅
 - Respects editorial priorities ✅
 - Has proper precedence rules ✅

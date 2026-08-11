@@ -17,12 +17,14 @@ Stage 8 is **COMPLETE** and implements a transparent, versioned ranking system t
 ## Implementation Statistics
 
 ### Files Changed
+
 - **28 files** changed
 - **4,148 insertions**, 109 deletions
 - **12 new files** created
 - **6 documentation files** updated
 
 ### Code
+
 - **Core ranking:** ~1,200 lines (service, engine, repository)
 - **Admin UI:** ~160 lines (ranking card, actions)
 - **Public integration:** ~120 lines (/top route)
@@ -30,6 +32,7 @@ Stage 8 is **COMPLETE** and implements a transparent, versioned ranking system t
 - **Documentation:** ~2,000 lines (plans, summaries, updates)
 
 ### Testing
+
 - ✅ **40 unit tests** (all passing)
 - ✅ **9 integration tests** (all passing)
 - ✅ **327 regression tests** (all passing)
@@ -41,27 +44,32 @@ Stage 8 is **COMPLETE** and implements a transparent, versioned ranking system t
 ## Core Components Delivered
 
 ### 1. Schema & Migration
+
 - `0016_story_ranking.sql` — `story_rankings` table (versioned, append-only)
 - `suppress_ranking` column on `publication_stories`
 - Proper indexes for efficient queries
 
 ### 2. Ranking Engine
+
 - **RankingService:** 6 deterministic signals + editorial adjustment
 - **RankingEngine:** Data gathering, calculation, caching, persistence
 - **StoryRankingRepository:** CRUD operations with correct precedence
 - **Formula v1:** Weighted sum with explicit version control
 
 ### 3. Admin Integration
+
 - **AdminRankingService:** Authorized operations with audit logging
 - **Story detail UI:** Ranking card with score, signals, history, manual trigger
 - **Actions:** `triggerRankingAction` (authorized, audited)
 
 ### 4. Public Integration
+
 - **/top route:** Displays top-ranked published Stories
 - **Public queries:** `listPublishedStoriesRanked()` with correct precedence
 - **Exclusions:** Suppressed Stories excluded, unpublished never appear
 
 ### 5. Documentation
+
 - **README.md:** Stage 8 summary
 - **DATA_MODEL.md:** Ranking schema and relationships
 - **ADMIN.md:** Admin workflows and controls
@@ -84,6 +92,7 @@ score = (freshness × 0.30) +
 ```
 
 **Signals:**
+
 - Freshness: Exponential decay, 24h half-life
 - Source Diversity: Distinct sources / 10
 - Source Authority: Weighted by tier (PRIMARY=1.0 ... DISCOVERY=0.2)
@@ -98,21 +107,27 @@ score = (freshness × 0.30) +
 ## Key Fixes Applied
 
 ### 1. Ranking Precedence ✅
+
 Latest **publication-specific** ranking wins over canonical:
+
 ```sql
 ORDER BY story_id,
          (publication_id = $1) DESC,  -- Prefer publication-specific
          calculated_at DESC
 ```
+
 A newer canonical ranking does NOT override an older publication-specific ranking.
 
 ### 2. No Double-Counting ✅
+
 Editorial adjustment applied **once** in ranking formula, not again in SQL:
+
 ```sql
 ORDER BY COALESCE(r.calculated_score, 0) DESC  -- Editorial already applied
 ```
 
 ### 3. Package Lock Restored ✅
+
 `package-lock.json` restored from main (no dependency changes).
 
 ---
@@ -145,7 +160,7 @@ ORDER BY COALESCE(r.calculated_score, 0) DESC  -- Editorial already applied
 ✅ PublicationStory remains the publishing boundary  
 ✅ Ranking is advisory and explainable  
 ✅ Editorial overrides are explicit and auditable  
-✅ Unpublished Stories never appear in public ranked lists  
+✅ Unpublished Stories never appear in public ranked lists
 
 ---
 
@@ -167,6 +182,7 @@ These are deferred to future stages or explicitly out of MVP scope.
 **Branch:** `claude/stage-8-ranking-trending`
 
 **Commits:**
+
 1. `647891f` — Core ranking implementation
 2. `e008813` — Complete ranking and public integration (docs)
 3. `2bc725e` — Restore package-lock.json from main
@@ -182,11 +198,13 @@ These are deferred to future stages or explicitly out of MVP scope.
 ## Next Steps
 
 **DO NOT:**
+
 - Open a pull request
 - Merge to `main`
 - Begin Stage 9
 
 **AWAIT:**
+
 - Human review of Stage 8 implementation
 - Approval before merging
 - Explicit instruction to proceed to Stage 9
@@ -198,6 +216,7 @@ These are deferred to future stages or explicitly out of MVP scope.
 **Stage 8 is production-ready and complete.**
 
 All required functionality implemented:
+
 - ✅ Transparent, versioned ranking
 - ✅ Publication-aware editorial prioritization
 - ✅ Admin UI for ranking review and trigger

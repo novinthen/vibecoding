@@ -218,7 +218,8 @@ function mapRow(row: StoryRankingRowDb): StoryRankingRow {
     ranking_method: row.ranking_method,
     ranking_version: row.ranking_version,
     calculated_score: Number(row.calculated_score),
-    signals: typeof row.signals === 'string' ? JSON.parse(row.signals) : row.signals,
+    signals:
+      typeof row.signals === 'string' ? JSON.parse(row.signals) : row.signals,
     calculated_at: row.calculated_at,
     time_horizon: row.time_horizon,
     explanation: row.explanation,

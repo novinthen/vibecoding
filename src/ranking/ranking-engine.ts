@@ -8,12 +8,13 @@ import { StoryRankingRepository } from '@/domain/repositories/story-ranking-repo
 import { StoryRepository } from '@/domain/repositories/story-repository';
 
 import type { ArticleEnrichmentRow } from '@/domain/types';
-import type { RankingInput, RankingSignals, StoryRankingRow } from '@/domain/ranking-types';
+import type {
+  RankingInput,
+  RankingSignals,
+  StoryRankingRow,
+} from '@/domain/ranking-types';
 
-import {
-  calculateStoryRanking,
-  RANKING_CONFIG_V1,
-} from './ranking-service';
+import { calculateStoryRanking, RANKING_CONFIG_V1 } from './ranking-service';
 
 /**
  * Stage 8 — Ranking orchestration engine.
@@ -74,7 +75,8 @@ export class RankingEngine {
       );
       if (existing && existing.ranking_version === RANKING_CONFIG_V1.version) {
         const ageMinutes =
-          (Date.now() - new Date(existing.calculated_at).getTime()) / (1000 * 60);
+          (Date.now() - new Date(existing.calculated_at).getTime()) /
+          (1000 * 60);
         if (ageMinutes < 60) {
           // Recent ranking exists; return null (skip)
           return null;
@@ -149,7 +151,11 @@ export class RankingEngine {
     publicationId?: string | null,
     force = false,
   ): Promise<StoryRankingRow> {
-    const prepared = await this.prepareRanking(storyId, publicationId ?? null, force);
+    const prepared = await this.prepareRanking(
+      storyId,
+      publicationId ?? null,
+      force,
+    );
     if (!prepared) {
       // Recent ranking exists; fetch and return it
       const existing = await this.rankingRepo.findLatestForStory(
@@ -237,10 +243,11 @@ export class RankingEngine {
     // Fetch publication context if publication-specific ranking
     let publicationContext = null;
     if (publicationId) {
-      const pubStory = await this.publicationStoryRepo.findByPublicationAndStory(
-        publicationId,
-        storyId,
-      );
+      const pubStory =
+        await this.publicationStoryRepo.findByPublicationAndStory(
+          publicationId,
+          storyId,
+        );
       if (pubStory) {
         publicationContext = {
           featured: pubStory.featured,
