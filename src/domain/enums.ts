@@ -206,3 +206,55 @@ export const MODEL_RELEVANCE_VALUES = [
 ] as const;
 export const modelRelevanceSchema = z.enum(MODEL_RELEVANCE_VALUES);
 export type ModelRelevance = z.infer<typeof modelRelevanceSchema>;
+
+/**
+ * Story review state (Stage 7). Mirrors the CHECK constraint on
+ * stories.review_state. UNREVIEWED is the default state of an automatically
+ * formed Story; REVIEWED and LOCKED both mark an editor decision the clustering
+ * engine must NEVER autonomously restructure (false-merge / silent-split
+ * protection). Only explicit, audited admin operations may change a protected
+ * Story's membership. LOCKED is a stronger editorial freeze than REVIEWED.
+ */
+export const STORY_REVIEW_STATES = [
+  'UNREVIEWED',
+  'REVIEWED',
+  'LOCKED',
+] as const;
+export const storyReviewStateSchema = z.enum(STORY_REVIEW_STATES);
+export type StoryReviewState = z.infer<typeof storyReviewStateSchema>;
+
+/** Review states the clustering engine treats as protected from auto-changes. */
+export const PROTECTED_STORY_REVIEW_STATES: ReadonlySet<StoryReviewState> =
+  new Set<StoryReviewState>(['REVIEWED', 'LOCKED']);
+
+/**
+ * How a Story or clustering decision came to be (Stage 7). AUTOMATIC = produced
+ * by the clustering engine; MANUAL = produced by an explicit editor action.
+ * Mirrors stories.formation_source and clustering_decisions.decision_source.
+ */
+export const CLUSTERING_SOURCES = ['AUTOMATIC', 'MANUAL'] as const;
+export const clusteringSourceSchema = z.enum(CLUSTERING_SOURCES);
+export type ClusteringSource = z.infer<typeof clusteringSourceSchema>;
+
+/**
+ * Terminal outcome of one clustering attempt for an Article (Stage 7). Mirrors
+ * the CHECK constraint on clustering_decisions.decision. A new Story is always
+ * formed when there is no confident match, so "no candidates" / "below threshold"
+ * are recorded in the decision's `reason`, not as separate outcomes:
+ *  - CREATED_STORY      — no confident match; a new Story was formed;
+ *  - ASSIGNED_EXISTING  — attached to a single confidently-matched Story;
+ *  - AMBIGUOUS          — multiple Stories matched within the ambiguity margin, so
+ *                         the engine refused to merge (false-split > false-merge);
+ *  - SKIPPED_EXISTING   — the Article is already clustered; a re-run made no change;
+ *  - SKIPPED_PROTECTED  — the best match is a REVIEWED/LOCKED Story, left for an
+ *                         explicit editorial workflow.
+ */
+export const CLUSTERING_DECISIONS = [
+  'CREATED_STORY',
+  'ASSIGNED_EXISTING',
+  'AMBIGUOUS',
+  'SKIPPED_EXISTING',
+  'SKIPPED_PROTECTED',
+] as const;
+export const clusteringDecisionSchema = z.enum(CLUSTERING_DECISIONS);
+export type ClusteringDecision = z.infer<typeof clusteringDecisionSchema>;

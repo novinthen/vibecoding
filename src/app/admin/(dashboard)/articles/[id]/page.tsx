@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 
 import { aiConfigured } from '@/ai';
+import { getArticleClusteringView } from '@/admin/services/clustering-service';
 import { getArticleEnrichmentReview } from '@/admin/services/enrichment-service';
 import {
   AdminAuditLogRepository,
@@ -20,6 +21,8 @@ import { ExternalUrl } from '../../../_components/untrusted';
 import { getDb, isDatabaseConfigured } from '../../../_lib/db';
 import { ArticleStatusForm } from '../status-form';
 
+import { ClusteringControls } from './clustering-form';
+import { ClusteringReview } from './clustering-review';
 import { EnrichmentReview } from './enrichment-review';
 import { EnrichmentTriggerForm } from './enrichment-form';
 
@@ -43,7 +46,7 @@ export default async function ArticleDetailPage({
   const article = await new ArticleRepository(db).findById(id);
   if (!article) notFound();
 
-  const [source, audit, enrichmentReview] = await Promise.all([
+  const [source, audit, enrichmentReview, clusteringView] = await Promise.all([
     new SourceRepository(db).findById(article.source_id),
     new AdminAuditLogRepository(db).listRecent({
       targetType: 'article',
@@ -51,6 +54,7 @@ export default async function ArticleDetailPage({
       limit: 10,
     }),
     getArticleEnrichmentReview(db, id),
+    getArticleClusteringView(db, id),
   ]);
   const aiReady = aiConfigured();
 
@@ -140,6 +144,8 @@ export default async function ArticleDetailPage({
           </Card>
 
           <EnrichmentReview review={enrichmentReview} />
+
+          <ClusteringReview view={clusteringView} />
         </div>
 
         <div className="space-y-4">
@@ -156,6 +162,10 @@ export default async function ArticleDetailPage({
                 Articles and public rendering are unaffected.
               </p>
             )}
+          </Card>
+
+          <Card title="Clustering">
+            <ClusteringControls id={article.id} />
           </Card>
 
           <Card title="Audit trail">

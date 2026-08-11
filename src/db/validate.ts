@@ -28,6 +28,7 @@ export const EXPECTED_TABLES = [
   'story_localizations',
   'article_embeddings',
   'story_embeddings',
+  'clustering_decisions',
   'admin_audit_log',
 ] as const;
 

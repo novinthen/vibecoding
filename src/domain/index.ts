@@ -39,7 +39,21 @@ export {
 export {
   StoryRepository,
   type CreateStoryInput,
+  type CreateClusteredStoryInput,
+  type AttachArticleInput,
+  type StoryWithStats,
 } from './repositories/story-repository';
+export {
+  ArticleEmbeddingRepository,
+  StoryEmbeddingRepository,
+  toVectorLiteral,
+  type UpsertEmbeddingInput,
+  type StoryNeighbour,
+} from './repositories/embedding-repository';
+export {
+  ClusteringDecisionRepository,
+  type RecordDecisionInput,
+} from './repositories/clustering-decision-repository';
 export {
   EntityRepository,
   type CreateEntityInput,

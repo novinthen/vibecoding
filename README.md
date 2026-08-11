@@ -18,11 +18,59 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 6 — AI Intelligence.**
+**Stage 7 — Story Clustering & Canonical Intelligence.**
 
-On top of the Stage 3 ingestion engine, Stage 4 admin, the Stage 5 public
-portal, and the Stage 5B multi-publication localisation layer, this repository
-now adds a **safe, versioned AI-enrichment layer** for canonical Articles. AI
+On top of the Stage 3 ingestion engine, Stage 4 admin, the Stage 5 public portal,
+the Stage 5B localisation layer, and the Stage 6 AI-enrichment layer, this
+repository now adds the first trustworthy **Story clustering** layer. It groups
+Articles that describe the same underlying event into canonical Stories while
+preserving every Article as independent evidence (**Article ≠ Story**):
+
+```
+Articles → bounded candidate generation → deterministic multi-signal scoring
+  → conservative cluster decision → Story + StoryArticles → reviewable provenance
+```
+
+Key properties:
+
+- **Embedding boundary** (`src/clustering/embedding`) mirroring the AI provider
+  boundary: a deterministic `FakeEmbeddingProvider` (feature hashing, no network)
+  is the only provider, so required CI is offline and reproducible; a real
+  provider is a drop-in. Embeddings are derived data, versioned/provenanced, and
+  never written to Article source fields.
+- **Bounded, explainable candidates** — embedding nearest-neighbours (exact
+  pgvector `<=>` within a time window) plus shared-Entity Stories; never all-pairs.
+- **Deterministic, versioned scoring** (`cluster-score-v1`) combining embedding
+  similarity, title overlap, shared entities, and temporal proximity — with a hard
+  evidence gate, a conservative threshold, and an ambiguity margin. Not an opaque
+  LLM decision.
+- **Conservative & safe** — biases to **false split > false merge**: two similarly
+  strong matches are left AMBIGUOUS (unclustered) rather than merged. Re-runs are
+  idempotent and concurrency-safe (per-Article advisory lock). Clustering never
+  mutates Article source facts, never publishes, and never auto-modifies a
+  REVIEWED/LOCKED Story.
+- **Reviewable provenance** — every attempt is an append-only `clustering_decisions`
+  row (method/version, outcome, confidence, scored candidate set). The admin
+  `/admin/stories` surface reviews members, decisions, source diversity, and offers
+  audited attach/detach/create/move/review operations.
+- **Optional & isolated** — clustering defaults to the fake provider and, when
+  unavailable, never affects ingestion, admin, or public rendering; scores/review
+  states are never exposed publicly and publishing stays the PublicationStory
+  boundary.
+
+Clustering is triggered **manually** by a mutating admin (no production
+scheduling). See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
+[`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) (Clustering Architecture), and
+[`docs/ADMIN.md`](docs/ADMIN.md).
+
+Stage 7 adds one migration (`0015`) that extends the embeddings, `stories`, and
+`story_articles` tables in place and adds the `clustering_decisions` log.
+
+---
+
+### Previously: Stage 6 — AI Intelligence
+
+Stage 6 added a **safe, versioned AI-enrichment layer** for canonical Articles. AI
 helps interpret source facts without becoming the source of truth:
 
 ```
@@ -113,11 +161,12 @@ The following remain **intentionally not implemented yet** and must not be added
 without moving to the appropriate roadmap stage:
 
 - GitHub / Hacker News / RSSHub-specific ingestion; arbitrary scraping
-- AI enrichment, summaries, entity extraction, embeddings **generation**
+- AI **summaries** / editorial Story copy; automatic promotion of AI output into
+  canonical Story/editorial fields
 - **automated AI translation** (Stage 5B localisation is manual/editorial +
-  import only; the automated-translation seam is Stage 6)
-- Story clustering, ranking, trending
-- scheduled production polling
+  import only)
+- Story **ranking, trending**, recommendation, personalization (Stage 8+)
+- automated publishing; production clustering/polling **scheduling**
 
 Public page rendering reads from PostgreSQL (the authoritative store) and does
 **not** depend on any live AI call. The `/admin` surface remains the only
@@ -138,7 +187,7 @@ explicit instruction.
 | Formatting | Prettier                                      |
 | Testing    | Vitest + Testing Library (jsdom)              |
 | Env safety | Zod runtime validation (`src/config/env.ts`)  |
-| Database   | PostgreSQL / Supabase + pgvector (prepared)   |
+| Database   | PostgreSQL / Supabase + pgvector (clustering) |
 | DB access  | `pg` behind a repository layer (`src/domain`) |
 
 ## Requirements
@@ -200,6 +249,9 @@ directly.
   (plus optional `AI_BASE_URL`). With none set, ingestion, admin, and public
   rendering behave exactly as before and the admin enrichment trigger is hidden.
   Keys are never exposed to the browser or placed in a prompt.
+- **Story clustering (Stage 7)** uses `EMBEDDING_PROVIDER` — only the
+  deterministic `fake` provider today (offline, no key). Unset defaults to `fake`,
+  so clustering needs no live embeddings API and nothing else is affected.
 
 ## Database
 
