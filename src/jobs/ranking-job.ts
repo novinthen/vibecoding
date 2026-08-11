@@ -70,7 +70,7 @@ export async function runRankingJob(
   let succeeded = 0;
   let skipped = 0;
   let failed = 0;
-  let retryableFailures = 0;
+  const retryableFailures = 0;
   const failures: ItemFailure[] = [];
 
   // Process each Story through the Stage 8 ranking engine.

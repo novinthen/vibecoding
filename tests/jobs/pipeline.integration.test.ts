@@ -10,7 +10,6 @@ import { Pool } from 'pg';
 import { runJob } from '@/jobs/job-runner';
 import { runIngestionJob } from '@/jobs/ingestion-job';
 import { runPipelineJob } from '@/jobs/pipeline-job';
-import { JobRunRepository } from '@/jobs/job-run-repository';
 import { buildJobResult } from '@/jobs/job-runner';
 import type { JobOutcome } from '@/jobs/types';
 
@@ -18,11 +17,9 @@ const skipIfNoDb = !process.env.DATABASE_URL;
 
 describe.skipIf(skipIfNoDb)('Pipeline integration (DB-gated)', () => {
   let pool: Pool;
-  let repo: JobRunRepository;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    repo = new JobRunRepository(pool);
   });
 
   afterAll(async () => {
@@ -43,16 +40,16 @@ describe.skipIf(skipIfNoDb)('Pipeline integration (DB-gated)', () => {
     });
 
     // Should have 5 job runs: pipeline + 4 stages
-    const allRuns = await pool.query(
+    const allRuns = await pool.query<{ job_name: string; status: string }>(
       "SELECT job_name, status FROM job_runs WHERE job_name IN ('pipeline', 'ingest', 'enrich', 'cluster', 'rank') ORDER BY started_at ASC",
     );
 
     expect(allRuns.rows.length).toBeGreaterThanOrEqual(5);
-    expect(allRuns.rows.some((r: any) => r.job_name === 'pipeline')).toBe(true);
-    expect(allRuns.rows.some((r: any) => r.job_name === 'ingest')).toBe(true);
-    expect(allRuns.rows.some((r: any) => r.job_name === 'enrich')).toBe(true);
-    expect(allRuns.rows.some((r: any) => r.job_name === 'cluster')).toBe(true);
-    expect(allRuns.rows.some((r: any) => r.job_name === 'rank')).toBe(true);
+    expect(allRuns.rows.some((r) => r.job_name === 'pipeline')).toBe(true);
+    expect(allRuns.rows.some((r) => r.job_name === 'ingest')).toBe(true);
+    expect(allRuns.rows.some((r) => r.job_name === 'enrich')).toBe(true);
+    expect(allRuns.rows.some((r) => r.job_name === 'cluster')).toBe(true);
+    expect(allRuns.rows.some((r) => r.job_name === 'rank')).toBe(true);
   });
 
   it('standalone ingest cannot overlap pipeline ingest', async () => {
@@ -113,11 +110,18 @@ describe.skipIf(skipIfNoDb)('Pipeline integration (DB-gated)', () => {
     });
 
     // Pipeline should report the skip
-    const metadata = pipelineOutcome.result.metadata as any;
+    const metadata = pipelineOutcome.result.metadata as Record<string, unknown> | null;
     expect(metadata).toBeDefined();
-    expect(metadata.stageResults).toBeDefined();
 
-    const ingestStage = metadata.stageResults.find((s: any) => s.stage === 'ingestion');
+    interface StageResult {
+      stage: string;
+      status: string;
+    }
+
+    const stageResults = metadata?.stageResults as StageResult[] | undefined;
+    expect(stageResults).toBeDefined();
+
+    const ingestStage = stageResults?.find((s) => s.stage === 'ingestion');
     expect(ingestStage?.status).toBe('SKIPPED');
 
     await lockJob;

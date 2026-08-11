@@ -14,7 +14,6 @@ import type { Pool } from 'pg';
 import { clusterArticle, isEligibleForClustering } from '@/clustering';
 import { resolveEmbeddingProvider } from '@/clustering/embedding/config';
 import { ArticleRepository } from '@/domain/repositories/article-repository';
-import { ClusteringDecisionRepository } from '@/domain/repositories/clustering-decision-repository';
 
 import { buildJobResult } from './job-runner';
 import type { ItemFailure, JobOutcome } from './types';
@@ -50,7 +49,6 @@ export async function runClusteringJob(
   const embeddingProvider = resolveEmbeddingProvider();
 
   const articleRepo = new ArticleRepository(pool);
-  const decisionRepo = new ClusteringDecisionRepository(pool);
 
   // Select Articles to process.
   let articles;
@@ -76,7 +74,7 @@ export async function runClusteringJob(
   let succeeded = 0;
   let skipped = 0;
   let failed = 0;
-  let retryableFailures = 0;
+  const retryableFailures = 0;
   const failures: ItemFailure[] = [];
 
   // Process each Article through the Stage 7 clustering engine.
@@ -84,10 +82,10 @@ export async function runClusteringJob(
     if (!article) continue;
 
     try {
-      const result = await clusterArticle(article.id, {
+      await clusterArticle(article.id, {
         embeddingProvider,
         force: options.force,
-      } as any);
+      } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
 
       // Any non-error outcome counts as succeeded (CREATED_STORY, ASSIGNED_EXISTING, AMBIGUOUS, SKIPPED_PROTECTED).
       succeeded += 1;
