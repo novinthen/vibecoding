@@ -23,6 +23,7 @@ architecture definitions.
 The platform now has bounded, safe, repeatable job automation for the full intelligence pipeline (ingestion → enrichment → clustering → ranking). Jobs run automatically without manual intervention while preserving editorial control and observability.
 
 **Key capabilities:**
+
 - **Session-correct advisory locks** — PostgreSQL-native overlap prevention using dedicated PoolClient
 - **Bounded execution** — all jobs have finite default batch limits (ingestion: 50, enrichment: 100, clustering: 50, ranking: 100)
 - **Stage lock isolation** — standalone jobs cannot overlap pipeline stages (dependency ordering preserved)

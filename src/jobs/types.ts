@@ -6,7 +6,8 @@
  * call existing Stage 3/6/7/8 engines without duplicating business logic.
  */
 
-export type JobStatus = 'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
+export type JobStatus =
+  'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
 
 export interface JobResult {
   jobName: string;

@@ -120,10 +120,13 @@ function JobStatusBadge({ status }: { status: string }) {
     SKIPPED: 'bg-gray-100 text-gray-800',
   };
 
-  const color = colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800';
+  const color =
+    colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800';
 
   return (
-    <span className={`inline-flex px-2 py-1 text-xs font-medium rounded ${color}`}>
+    <span
+      className={`inline-flex px-2 py-1 text-xs font-medium rounded ${color}`}
+    >
       {status}
     </span>
   );

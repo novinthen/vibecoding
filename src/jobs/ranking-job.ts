@@ -54,9 +54,7 @@ export async function runRankingJob(
     // Explicit story IDs (admin manual trigger or targeted run).
     // Cap to prevent unbounded explicit ID lists.
     const cappedIds = options.storyIds.slice(0, MAX_EXPLICIT_IDS);
-    stories = await Promise.all(
-      cappedIds.map((id) => storyRepo.findById(id)),
-    );
+    stories = await Promise.all(cappedIds.map((id) => storyRepo.findById(id)));
     stories = stories.filter((s) => s !== null);
   } else {
     // Default: find Stories that need ranking.
@@ -92,7 +90,8 @@ export async function runRankingJob(
         skipped += 1;
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
       failed += 1;
       // Ranking errors are typically non-retryable (missing data, logic errors).
       failures.push({

@@ -81,9 +81,9 @@ describe.skipIf(skipIfNoDb)('Pipeline correctness (DB-gated)', () => {
     // Should have: ingest (RUNNING from lock holder), ingest (SKIPPED from pipeline)
     // Should NOT have: enrich, cluster, rank
     const jobNames = runs.rows.map((r) => r.job_name);
-    expect(jobNames.filter((n) => n === 'ingest').length).toBeGreaterThanOrEqual(
-      1,
-    );
+    expect(
+      jobNames.filter((n) => n === 'ingest').length,
+    ).toBeGreaterThanOrEqual(1);
     expect(jobNames.includes('enrich')).toBe(false);
     expect(jobNames.includes('cluster')).toBe(false);
     expect(jobNames.includes('rank')).toBe(false);

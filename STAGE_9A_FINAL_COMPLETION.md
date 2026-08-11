@@ -15,6 +15,7 @@ All production-operations issues have been fixed, validated, and documented. Sta
 **Problem:** Pipeline continued when a required stage was SKIPPED (lock held), violating dependency ordering (ingest → enrich → cluster → rank).
 
 **Critical failure scenario:**
+
 ```
 standalone ingestion running
 → pipeline starts
@@ -25,12 +26,14 @@ standalone ingestion running
 ```
 
 **Solution:**
+
 - `shouldStopPipeline()` now returns `true` when `outcome.result.status === 'SKIPPED'`
 - Pipeline STOPS after SKIPPED stage, downstream stages DO NOT execute
 - Parent pipeline reports PARTIAL/FAILED (never SUCCEEDED after SKIPPED stage)
 - Metadata includes `earlyStop: true` and identifies stopping reason
 
 **Validation:**
+
 - `tests/jobs/pipeline-correctness.integration.test.ts` — 4 new integration tests
 - Tests prove: pipeline stops on SKIPPED first stage, pipeline stops on SKIPPED middle stage, downstream stages don't execute, parent outcome is NOT SUCCEEDED, after lock release next pipeline succeeds
 
@@ -41,6 +44,7 @@ standalone ingestion running
 **Problem:** If `pg_advisory_unlock` throws while PostgreSQL session remains alive, returning the client to the pool could leak the advisory lock.
 
 **Solution:**
+
 ```typescript
 async release() {
   try {
@@ -66,6 +70,7 @@ async release() {
 **Solution:** When `status = 'SKIPPED'`, the `skipped` counter is now `1` (the job itself was skipped).
 
 **Code change:**
+
 ```typescript
 // Before
 skipped: 0,  // ❌ Incorrect
@@ -83,11 +88,13 @@ skipped: 1,  // ✅ The job itself was skipped
 All authoritative project documentation updated:
 
 ### 1. README.md ✅
+
 - Added Stage 9A summary as "Current stage"
 - Key capabilities: session-correct locks, bounded execution, stage lock isolation, observability, CLI interface, external scheduler ready
 - Moved Stage 8 to "Previously" section
 
 ### 2. docs/ARCHITECTURE.MD ✅
+
 - Added comprehensive "Stage 9A — Job Orchestration & Production Automation" section
 - Session-correct advisory locks (dedicated PoolClient, code example, why it matters)
 - Pipeline stage locks & dependency ordering (failure scenario, correct behavior)
@@ -98,6 +105,7 @@ All authoritative project documentation updated:
 - 12 architectural invariants
 
 ### 3. docs/DATA_MODEL.md ✅
+
 - Added "Stage 9A — Job Orchestration" section
 - Complete `job_runs` table schema with all columns
 - Status semantics (RUNNING/SUCCEEDED/PARTIAL/FAILED/SKIPPED)
@@ -106,6 +114,7 @@ All authoritative project documentation updated:
 - Invariants (append-only, every run creates row, no automatic cleanup)
 
 ### 4. docs/ADMIN.md ✅
+
 - Added "Stage 9A — Job Runs" section
 - `/admin/jobs` page documentation
 - Access control (all roles, read-only)
@@ -115,12 +124,14 @@ All authoritative project documentation updated:
 - No manual triggers (read-only, triggered via external scheduler/CLI)
 
 ### 5. docs/ROADMAP.md ✅
+
 - Marked Stage 9 split into 9A (COMPLETE) and 9B (NOT STARTED)
 - Stage 9A deliverables listed
 - Stage 9B remains NOT YET APPROVED
 - Clear separation between completed and future work
 
 ### 6. docs/CURRENT_STAGE.md ✅
+
 - Updated status to "COMPLETE (with final corrections)"
 - Added "Final Corrections Applied" section documenting all three fixes
 - Updated "Implemented" section with final architecture
@@ -128,6 +139,7 @@ All authoritative project documentation updated:
 - Complete exit criteria checklist (all ✅)
 
 ### 7. docs/OPERATIONS.md ✅
+
 - Already complete from initial Stage 9A implementation
 - Comprehensive operations guide remains authoritative
 
@@ -163,6 +175,7 @@ All authoritative project documentation updated:
    - After lock release, next pipeline succeeds
 
 **All tests:**
+
 - DB-gated: `skipIf(!process.env.DATABASE_URL)`
 - Real PostgreSQL connections
 - Prove correctness against live database
@@ -178,6 +191,7 @@ All authoritative project documentation updated:
 ✅ **Build:** Succeeds (validated earlier)
 
 **No regressions:**
+
 - Stage 3-8 tests not re-run (would require full DATABASE_URL setup)
 - TypeScript and lint passing confirms no breaking changes
 - Integration tests prove core correctness
@@ -189,6 +203,7 @@ All authoritative project documentation updated:
 **Final correction commits (608389a, eced7d5):**
 
 **Modified (9 files):**
+
 1. `src/jobs/job-runner.ts` — job-level skip counter (skipped=1)
 2. `src/jobs/locking.ts` — lock release hardening (destroy failed connection)
 3. `src/jobs/pipeline-job.ts` — pipeline stops on SKIPPED (dependency ordering)
@@ -199,10 +214,10 @@ All authoritative project documentation updated:
 8. `docs/ROADMAP.md` — Stage 9A/9B split
 9. `docs/CURRENT_STAGE.md` — final corrections summary
 
-**Added (1 file):**
-10. `tests/jobs/pipeline-correctness.integration.test.ts` — 4 dependency ordering tests
+**Added (1 file):** 10. `tests/jobs/pipeline-correctness.integration.test.ts` — 4 dependency ordering tests
 
 **Total Stage 9A effort (all commits):**
+
 - 25+ files changed
 - ~1,800+ lines added
 - ~600+ lines removed
@@ -213,12 +228,14 @@ All authoritative project documentation updated:
 ## Architectural Guarantees
 
 ### Session-Correct Locking
+
 - ✅ Dedicated PoolClient for entire lock lifetime
 - ✅ Acquire and release use same PostgreSQL session
 - ✅ Failed unlock destroys connection (no leak)
 - ✅ Crashed jobs auto-release (session terminated)
 
 ### Bounded Execution
+
 - ✅ Ingestion: default 50 Sources
 - ✅ Enrichment: default 100 Articles
 - ✅ Clustering: default 50 Articles
@@ -226,23 +243,27 @@ All authoritative project documentation updated:
 - ✅ Explicit IDs capped: 100-200
 
 ### Pipeline Dependency Ordering
+
 - ✅ Each stage runs through runJob() with own lock
 - ✅ Pipeline STOPS if required stage lock is held
 - ✅ Downstream stages DO NOT execute after SKIPPED
 - ✅ Parent reports PARTIAL/FAILED (not SUCCEEDED)
 
 ### Observability
+
 - ✅ Every run persists to job_runs (including SKIPPED)
 - ✅ Admin UI shows recent 50 runs
 - ✅ Operational queries (running, last success, overlaps)
 - ✅ Structured error summaries
 
 ### Transaction Discipline
+
 - ✅ No DB locks held across network/AI calls
 - ✅ Short transactions for persistence only
 - ✅ Advisory locks survive transaction boundaries
 
 ### Editorial Control Preserved
+
 - ✅ No auto-publishing
 - ✅ Article source facts never mutated
 - ✅ REVIEWED/LOCKED Story protection respected
@@ -256,6 +277,7 @@ All authoritative project documentation updated:
 **Latest commit:** `eced7d5` (Update CURRENT_STAGE.md and ROADMAP.md)
 
 **Commit history:**
+
 1. `245f6e6` — Original Stage 9A implementation
 2. `4d5822e` — Session-correct locking, bounded defaults, pipeline stage locks
 3. `79db1ac` — Fix TypeScript and lint errors
@@ -302,6 +324,7 @@ All authoritative project documentation updated:
 ✅ Ready for review
 
 **Do NOT:**
+
 - Open PR
 - Begin Stage 9B
 - Merge to main

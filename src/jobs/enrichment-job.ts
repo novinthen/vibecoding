@@ -11,7 +11,10 @@
 import type { Pool } from 'pg';
 
 import { buildProvider } from '@/ai/config';
-import { enrichArticle, isEligibleForEnrichment } from '@/ai/enrichment/service';
+import {
+  enrichArticle,
+  isEligibleForEnrichment,
+} from '@/ai/enrichment/service';
 import { ArticleRepository } from '@/domain/repositories/article-repository';
 import { ArticleEnrichmentRepository } from '@/domain/repositories/article-enrichment-repository';
 
@@ -48,8 +51,12 @@ export async function runEnrichmentJob(
   // Resolve AI provider (may be fake or real Anthropic).
   const provider = buildProvider(
     process.env.AI_PROVIDER === 'anthropic'
-      ? { provider: 'anthropic', model: process.env.AI_MODEL || 'claude-3-5-sonnet-20241022', apiKey: process.env.AI_API_KEY }
-      : { provider: 'fake', model: 'fake-model' }
+      ? {
+          provider: 'anthropic',
+          model: process.env.AI_MODEL || 'claude-3-5-sonnet-20241022',
+          apiKey: process.env.AI_API_KEY,
+        }
+      : { provider: 'fake', model: 'fake-model' },
   );
 
   const articleRepo = new ArticleRepository(pool);
@@ -87,9 +94,14 @@ export async function runEnrichmentJob(
     if (!article) continue;
 
     try {
-      const result = await enrichArticle(provider, article.id, {
-        force: options.force,
-      }, { pool });
+      const result = await enrichArticle(
+        provider,
+        article.id,
+        {
+          force: options.force,
+        },
+        { pool },
+      );
 
       if (result.outcome === 'SUCCEEDED') {
         succeeded += 1;
@@ -122,7 +134,8 @@ export async function runEnrichmentJob(
       }
     } catch (error) {
       // Ineligible or article not found (should be filtered earlier).
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
       if (errorMessage.includes('not eligible')) {
         skipped += 1;
       } else {
@@ -183,7 +196,9 @@ async function findEligibleArticles(
   enrichmentRepo: ArticleEnrichmentRepository,
   batchLimit: number,
   force: boolean,
-): Promise<Array<NonNullable<Awaited<ReturnType<typeof articleRepo.findById>>>>> {
+): Promise<
+  Array<NonNullable<Awaited<ReturnType<typeof articleRepo.findById>>>>
+> {
   // Fetch recent Articles by querying directly (no listRecent method exists).
   const result = await articleRepo['db'].query<{ id: string }>(
     `SELECT id FROM articles

@@ -5,9 +5,11 @@
 **Commit:** `c02ac12` (Fix pipeline status after SKIPPED required stage)
 
 ### Problem
+
 Pipeline could report `status = SUCCEEDED` when a required stage was SKIPPED due to lock contention, because `buildJobResult()` returns SUCCEEDED when `failed === 0`.
 
 **Example failure:**
+
 ```
 ingest stage SKIPPED (lock held)
   → attempted = 0, failed = 0
@@ -16,6 +18,7 @@ ingest stage SKIPPED (lock held)
 ```
 
 ### Solution
+
 `buildPipelineOutcome()` now explicitly checks for SKIPPED stages:
 
 ```typescript
@@ -35,7 +38,9 @@ if (hasSkippedStage) {
 ```
 
 ### Metadata
+
 When a stage is SKIPPED, metadata includes:
+
 ```typescript
 {
   reason: 'required_stage_locked',
@@ -45,6 +50,7 @@ When a stage is SKIPPED, metadata includes:
 ```
 
 ### Key Points
+
 - **Scope:** Only affects pipeline-level aggregation
 - **Normal skips preserved:** Item-level skips (already enriched, recent ranking) still allow SUCCEEDED
 - **Explicit pipeline logic:** Does NOT change generic `buildJobResult()` semantics
@@ -54,15 +60,18 @@ When a stage is SKIPPED, metadata includes:
 ## Validation Status
 
 ### Code Quality ✅
+
 - ✅ TypeScript check: PASS
 - ✅ Lint check: PASS
 - ⏳ Format check: Not run
 - ⏳ Build: Not run
 
 ### Database Tests ⏳
+
 **Awaiting DATABASE_URL configuration**
 
 Required commands:
+
 ```bash
 export DATABASE_URL='postgresql://user:password@localhost:5432/vibecoding_test'
 npm run db:setup
@@ -70,6 +79,7 @@ npm test
 ```
 
 Expected test counts:
+
 - **Stage 9A integration tests:** 17 tests (4 suites)
   - `locking.integration.test.ts`: 6 tests
   - `job-runner.integration.test.ts`: 4 tests
@@ -80,17 +90,21 @@ Expected test counts:
 All 17 Stage 9A tests must show as PASSED (not skipped).
 
 ### Controlled Smoke Test ⏳
+
 **Test 1:** Pipeline with no locks
+
 - Expected: All 4 stages complete
 - Expected: Parent status = SUCCEEDED
 
 **Test 2:** Pipeline with held ingest lock
+
 - Expected: Ingest stage = SKIPPED
 - Expected: Enrich/cluster/rank DO NOT run
 - Expected: Parent status = PARTIAL
 - Expected: Metadata reason = 'required_stage_locked'
 
 **Test 3:** After lock release
+
 - Expected: Next pipeline = SUCCEEDED
 
 ---
@@ -98,15 +112,19 @@ All 17 Stage 9A tests must show as PASSED (not skipped).
 ## All Correctness Issues Fixed
 
 ### 1. ✅ Pipeline Dependency Ordering (608389a)
+
 Pipeline now STOPS when required stage lock is held. Downstream stages do not execute.
 
 ### 2. ✅ Advisory Lock Release Hardening (608389a)
+
 Failed unlock destroys connection via `client.release(error)`.
 
 ### 3. ✅ Job-Level Skip Counter Semantics (608389a)
+
 When `status = 'SKIPPED'`, `skipped = 1` (the job itself).
 
 ### 4. ✅ Pipeline Status After SKIPPED Stage (c02ac12)
+
 Pipeline reports PARTIAL (not SUCCEEDED) when required stage is SKIPPED.
 
 ---
@@ -117,6 +135,7 @@ Pipeline reports PARTIAL (not SUCCEEDED) when required stage is SKIPPED.
 **Latest:** `c02ac12` (Fix pipeline status after SKIPPED required stage)
 
 **Recent commits:**
+
 - `c02ac12` — Fix pipeline status after SKIPPED stage
 - `d3c55dd` — Stage 9A final completion report
 - `eced7d5` — Update CURRENT_STAGE/ROADMAP
@@ -146,6 +165,6 @@ Pipeline reports PARTIAL (not SUCCEEDED) when required stage is SKIPPED.
 **Pipeline status fix:** PARTIAL when required stage is SKIPPED (lock held)  
 **Code quality:** TypeScript ✓, Lint ✓  
 **Tests:** 17 integration tests ready to run  
-**Documentation:** Complete  
+**Documentation:** Complete
 
 Stage 9A is ready for final validation with real PostgreSQL database.

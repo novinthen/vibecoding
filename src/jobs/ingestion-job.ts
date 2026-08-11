@@ -55,9 +55,7 @@ export async function runIngestionJob(
     // Explicit source IDs (admin manual trigger or targeted run).
     // Cap to prevent unbounded explicit ID lists.
     const cappedIds = options.sourceIds.slice(0, MAX_EXPLICIT_IDS);
-    sources = await Promise.all(
-      cappedIds.map((id) => sourceRepo.findById(id)),
-    );
+    sources = await Promise.all(cappedIds.map((id) => sourceRepo.findById(id)));
     sources = sources.filter((s) => s !== null);
   } else {
     // Default: enabled Sources with acceptable health.
@@ -69,9 +67,7 @@ export async function runIngestionJob(
         return s.health_status === 'HEALTHY';
       }
       if (minHealth === 'DEGRADED') {
-        return (
-          s.health_status === 'HEALTHY' || s.health_status === 'DEGRADED'
-        );
+        return s.health_status === 'HEALTHY' || s.health_status === 'DEGRADED';
       }
       // UNKNOWN: include HEALTHY, DEGRADED, UNKNOWN (exclude FAILING, DISABLED).
       return (

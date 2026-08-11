@@ -92,8 +92,12 @@ export async function runClusteringJob(
 
       // AMBIGUOUS and SKIPPED_PROTECTED are recorded decisions, not failures.
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (errorMessage.includes('not eligible') || errorMessage.includes('not found')) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      if (
+        errorMessage.includes('not eligible') ||
+        errorMessage.includes('not found')
+      ) {
         skipped += 1;
       } else {
         failed += 1;
@@ -154,7 +158,9 @@ async function findEligibleArticles(
   pool: Pool,
   batchLimit: number,
   force: boolean,
-): Promise<Array<NonNullable<Awaited<ReturnType<typeof articleRepo.findById>>>>> {
+): Promise<
+  Array<NonNullable<Awaited<ReturnType<typeof articleRepo.findById>>>>
+> {
   // Fetch recent Articles by querying directly.
   const result = await pool.query<{ id: string }>(
     `SELECT id FROM articles

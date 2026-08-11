@@ -202,7 +202,11 @@ function buildPipelineOutcome(
       errorSummary: outcome.result.errorSummary,
     })),
     earlyStop: earlyStopReason !== null,
-    reason: hasSkippedStage ? 'required_stage_locked' : earlyStopReason ? 'stage_failure' : null,
+    reason: hasSkippedStage
+      ? 'required_stage_locked'
+      : earlyStopReason
+        ? 'stage_failure'
+        : null,
   };
 
   // Determine pipeline status

@@ -14,9 +14,4 @@ export { runEnrichmentJob, type EnrichmentJobOptions } from './enrichment-job';
 export { runClusteringJob, type ClusteringJobOptions } from './clustering-job';
 export { runRankingJob, type RankingJobOptions } from './ranking-job';
 export { runPipelineJob, type PipelineJobOptions } from './pipeline-job';
-export type {
-  JobStatus,
-  JobResult,
-  JobOutcome,
-  ItemFailure,
-} from './types';
+export type { JobStatus, JobResult, JobOutcome, ItemFailure } from './types';

@@ -13,6 +13,7 @@
 **Problem:** Pipeline reported SUCCEEDED when a required stage was SKIPPED (lock held), because `buildJobResult()` returns SUCCEEDED when `failed === 0`.
 
 **Solution:** `buildPipelineOutcome()` now explicitly checks for SKIPPED stages:
+
 ```typescript
 const hasSkippedStage = stageResults.some(
   ({ outcome }) => outcome.result.status === 'SKIPPED',
@@ -32,18 +33,21 @@ if (hasSkippedStage) {
 ## Validation Checklist
 
 ### Code Quality
+
 - ✅ TypeScript check: PASS
 - ✅ Lint check: PASS
 - ⏳ Format check: Not run yet
 - ⏳ Build: Not run yet
 
 ### Database Tests
+
 - ⏳ Migrations: Awaiting DATABASE_URL
 - ⏳ Full test suite: Awaiting DATABASE_URL
 - ⏳ Stage 9A integration tests (17 tests): Awaiting DATABASE_URL
 - ⏳ Stage 3-8 regression: Awaiting DATABASE_URL
 
 ### Smoke Test
+
 - ⏳ Pipeline with no locks (expected: SUCCEEDED)
 - ⏳ Pipeline with held ingest lock (expected: PARTIAL)
 - ⏳ Release lock and retry (expected: SUCCEEDED)

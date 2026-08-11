@@ -75,7 +75,9 @@ async function main() {
 
       default:
         console.error(`Unknown job: ${command}`);
-        console.error('Available jobs: ingest, enrich, cluster, rank, pipeline');
+        console.error(
+          'Available jobs: ingest, enrich, cluster, rank, pipeline',
+        );
         process.exit(1);
     }
 
