@@ -131,7 +131,7 @@ Expected work:
 
 ## Stage 5 — Public Portal
 
-**Status:** CURRENT
+**Status:** COMPLETE
 
 Goal:
 
@@ -292,8 +292,9 @@ Delivered:
   public-launch / operations), no BLOCKERs found;
 - baseline security response headers on every route (`next.config.mjs`);
 - authenticated, bounded, fail-closed production job trigger
-  (`POST|GET /api/jobs/[job]`) reusing the Stage 9A orchestration, scheduled via
-  `vercel.json`;
+  (`POST|GET /api/jobs/[job]`) reusing the Stage 9A orchestration; no automatic
+  Vercel cron schedule is committed because the real job runtime must first be
+  measured against the deployment execution budget;
 - operator monitoring runbook over existing `job_runs` / `SourceFetch` / Source
   health;
 - backup & recovery procedure (managed provider + idempotent migrations;
