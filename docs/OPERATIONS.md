@@ -107,7 +107,9 @@ Each command:
 
 ### Manual Triggering
 
-Jobs can also be triggered from admin UI (to be added) or called programmatically:
+The admin **`/admin/jobs`** page is intentionally read-only (it shows run history,
+not trigger buttons). Besides the CLI and the authenticated `/api/jobs/[job]`
+endpoint (Stage 10), jobs can be invoked programmatically:
 
 ```typescript
 import { runJob, runIngestionJob } from '@/jobs';
@@ -129,26 +131,47 @@ Default examples (environment-configurable in production):
 - **Ranking**: every 10–30 minutes (after clustering has run)
 - **Pipeline**: only if using single coordinated execution (longer interval)
 
-### External Scheduler
+### Production job-trigger endpoint (Stage 10)
+
+The authenticated HTTP trigger is **implemented**:
+`POST|GET /api/jobs/[job]` (`src/app/api/jobs/[job]/route.ts`). It is the smallest
+safe way for a deployment scheduler to invoke the **existing** Stage 9A
+orchestration — it does not duplicate any pipeline logic, and overlap protection
+remains the job runner's advisory-lock responsibility.
+
+- **Jobs**: `ingest`, `enrich`, `cluster`, `rank`, `pipeline` (allowlisted; any
+  other path segment returns 404).
+- **Auth**: `Authorization: Bearer <CRON_SECRET>`, checked in constant time. When
+  `CRON_SECRET` is **unset the endpoint fails closed** — every request is 401 —
+  so an unconfigured deployment can never be triggered anonymously. Set a long,
+  high-entropy `CRON_SECRET` (server-only; never exposed or logged).
+- **Response**: JSON operational summary (`kind`, `status`, counts, `durationMs`).
+  `SUCCESS`/`PARTIAL` → HTTP 200; `FAILED` → HTTP 500. A lock-contended run is
+  recorded as `SKIPPED` (still HTTP 200) exactly as the CLI reports it.
+- **Runtime**: Node.js runtime, `dynamic = 'force-dynamic'`, `maxDuration = 60`.
 
 Production scheduling options:
 
 1. **Vercel Cron** (simplest for Vercel hosting):
-   - Add API route at `/api/jobs/[job]`
-   - Protect with secret token (constant-time comparison)
-   - Configure schedule in `vercel.json`
+   - `vercel.json` already schedules `/api/jobs/pipeline`
+     (`7,22,37,52 * * * *`, i.e. every 15 min off the :00 mark). Tune the cadence
+     to your Vercel plan's cron limits (Hobby is limited; Pro allows minute-level).
+   - Vercel Cron issues **GET** and automatically attaches
+     `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set in the
+     project — no extra wiring needed.
+   - To run stages on separate cadences instead of the coordinated pipeline, add
+     `/api/jobs/ingest`, `/api/jobs/enrich`, etc. entries.
 
 2. **GitHub Actions** (repository-based):
-   - Scheduled workflow calls authenticated API endpoint
-   - Logs stored in Actions history
+   - A scheduled workflow `curl -X POST -H "Authorization: Bearer $CRON_SECRET"
+     https://<host>/api/jobs/pipeline`; logs stored in Actions history.
 
 3. **System cron** (dedicated server):
-   - `crontab -e` entries call `npm run jobs:*`
-   - Output logged to file or syslog
+   - Either `curl` the endpoint (as above) or run `npm run jobs:*` directly.
 
 4. **Inngest** (future enhancement):
-   - Durable workflows with retries and observability
-   - Currently not implemented (Stage 9A uses simpler scheduling)
+   - Durable workflows with retries and observability; not implemented (the
+     Stage 9A/10 model uses a simpler authenticated trigger).
 
 ### Avoiding the :00 and :30 Minute Marks
 
@@ -211,11 +234,13 @@ All jobs maintain these guarantees:
 
 ### Environment Variables
 
-No new required variables for Stage 9A. Jobs use existing config:
+Jobs use existing config plus the Stage 10 trigger secret:
 
 - `DATABASE_URL` — required (PostgreSQL connection)
 - `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL` — optional (enrichment uses fake provider if unset)
 - `EMBEDDING_PROVIDER` — optional (clustering uses fake provider by default)
+- `GITHUB_TOKEN` — optional server-only token raising the GitHub API rate limit for Release ingestion (Stage 9B); never stored in `source_config` or logged
+- `CRON_SECRET` — required to use the production job-trigger endpoint (Stage 10). Unset ⇒ the endpoint fails closed (401). Server-only; never exposed or logged
 
 ### Job-Specific Options
 
@@ -271,7 +296,10 @@ runPipelineJob(pool, {
 
 ### Integration Tests
 
-(To be added after smoke test confirms basic functionality)
+DB-gated integration suites exist and run in the GitHub Actions Postgres 16 +
+pgvector job (`tests/jobs/*.integration.test.ts`,
+`tests/ingestion/mixed-source.integration.test.ts`, and the Stage 10
+`tests/jobs/http-trigger.integration.test.ts`). They cover:
 
 - End-to-end job runs with real database
 - Batch limit enforcement
@@ -321,15 +349,107 @@ If issues arise:
 
 ### Admin Visibility
 
-(To be added in follow-up work)
+The admin surfaces below already exist and are the primary operator UI (no
+external observability platform is required to launch):
 
-Admin dashboard sections:
+- **`/admin/jobs`** — the most recent `job_runs` with status, timing, results, and
+  error summaries (read-only for all admin roles).
+- **`/admin/fetches`** — recent `SourceFetch` attempts across all Sources with
+  status filtering, HTTP/result info, counts, and error codes.
+- **`/admin/sources`** — per-Source health, consecutive failure count, last
+  success, and conditional-fetch state; the overview also counts Sources by
+  health status.
 
-- **Job Status Card**: currently running jobs, last successful run per job, recent failures
-- **Job History Table**: recent runs (all jobs), sortable/filterable
-- **Per-Job Detail View**: run history for one job, outcome charts, error summaries
+### Operator monitoring runbook (Stage 10)
 
-Manual trigger buttons can reuse the same `runJob()` interface with proper authorization.
+Answer the launch-critical operational questions using existing tables/surfaces —
+no new infrastructure:
+
+- **Are jobs running / when did the last pipeline succeed?**
+  `/admin/jobs`, or:
+  `SELECT job_name, status, started_at, finished_at FROM job_runs WHERE job_name = 'pipeline' ORDER BY started_at DESC LIMIT 5;`
+  Last success: `... WHERE job_name = 'pipeline' AND status = 'SUCCEEDED' ORDER BY started_at DESC LIMIT 1;`
+- **Which stage failed?** Each pipeline stage records its own child `job_runs`
+  row (`ingest`/`enrich`/`cluster`/`rank`); a PARTIAL/FAILED parent points to the
+  stage whose row is FAILED (or SKIPPED on lock contention). The row's
+  `error_summary`/`metadata` carry the detail.
+- **Which Sources are unhealthy?** `/admin/sources`, or:
+  `SELECT slug, health_status, failure_count, last_success_at FROM sources WHERE health_status IN ('DEGRADED','FAILING') ORDER BY failure_count DESC;`
+- **Are failures recurring?**
+  `SELECT job_name, count(*) FILTER (WHERE status='FAILED') AS fails FROM job_runs WHERE started_at > NOW() - INTERVAL '24 hours' GROUP BY job_name ORDER BY fails DESC;`
+  and for a Source's fetch history: `/admin/fetches` filtered by status.
+- **Stuck jobs:** `SELECT * FROM job_runs WHERE status = 'RUNNING' AND started_at < NOW() - INTERVAL '1 hour';`
+
+External error reporting (e.g. Sentry) is **not** wired in and is not required for
+launch; add it later only if a concrete need arises.
+
+## Security hardening (Stage 10)
+
+- **Response headers** — every route carries baseline security headers
+  (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`,
+  `Permissions-Policy`, `Strict-Transport-Security`) via `next.config.mjs`;
+  `X-Powered-By` is disabled. A strict `Content-Security-Policy` is **deferred**:
+  a correct CSP for Next.js needs per-request script nonces, which is larger than
+  Stage 10's scope. Track it as future hardening.
+- **Job trigger** — authenticated + fails closed (see above); the only new public
+  route, and it exposes no secrets or internals.
+- **Secrets** — `DATABASE_URL`, `AI_API_KEY`, `GITHUB_TOKEN`, `ADMIN_SESSION_SECRET`,
+  `CRON_SECRET` are all server-only (validated in `src/config/env.ts`), never sent
+  to the browser and never logged.
+- **Not added (deferred):** admin login rate-limiting requires a shared store
+  (out of scope; the roster is env-configured, passwords are scrypt-hashed, and
+  the surface is not publicly advertised). Revisit if the admin surface is exposed
+  to untrusted networks.
+
+## Backup & Recovery (Stage 10)
+
+PostgreSQL is the single authoritative store; there is no custom backup
+infrastructure and none should be built. Recovery relies on the managed database
+provider (Supabase in production) plus this repository's deterministic migrations.
+
+### Backup expectations
+
+- **Managed provider backups.** Supabase performs automated daily backups on
+  paid plans (and Point-in-Time Recovery on higher tiers). Confirm the project's
+  plan actually has backups/PITR enabled before launch — a free-tier project may
+  not. This is the primary recovery mechanism.
+- **Schema is reproducible from source.** The ordered SQL migrations in
+  `src/db/migrations` plus `schema_migrations` fully reconstruct the schema; no
+  schema state lives outside the repository.
+
+### Restore procedure
+
+1. **Provision / restore the database.** Restore from the provider's latest
+   backup or PITR to a new or existing instance (follow the provider's console
+   flow). For a fresh instance with no data, skip to step 3.
+2. **Point the app at it.** Set `DATABASE_URL` (and `DIRECT_URL` if used) to the
+   restored instance.
+3. **Apply migrations.** `npm run db:migrate` — idempotent; applies only missing
+   migrations and records them in `schema_migrations`.
+4. **Seed controlled reference data.** `npm run db:seed` — idempotent; inserts the
+   controlled top-level Topic taxonomy if absent (does not create demo content).
+5. **Validate the schema.** `npm run db:validate` — confirms connectivity and that
+   all expected tables are present (`npm run db:setup` runs steps 3–5 together).
+
+### Required secrets / configuration for recovery
+
+`DATABASE_URL` (and optional `DIRECT_URL`); `ADMIN_SESSION_SECRET` + `ADMIN_USERS`
+for the admin surface; `CRON_SECRET` for the job trigger; optionally `AI_PROVIDER`
+/`AI_API_KEY`/`AI_MODEL`, `EMBEDDING_PROVIDER`, and `GITHUB_TOKEN`. These live only
+in the deployment environment, never in the database, so they must be restored
+from the secret manager, not from a database backup.
+
+### Post-restore validation
+
+- `npm run db:validate` passes (all expected tables present).
+- The public portal renders (`/`, `/latest`) for a configured Publication domain.
+- `/admin/login` authenticates and `/admin/jobs` loads.
+- A manual `POST /api/jobs/rank` (with `CRON_SECRET`) returns HTTP 200 and records
+  a `job_runs` row — confirming DB writes and the job path end-to-end.
+
+> Recovery is **documented, not verified** here: perform a real restore drill in a
+> staging project before relying on it. Do not claim recovery is tested until a
+> drill has actually been run.
 
 ## Stage 9B — Developer Intelligence Sources
 

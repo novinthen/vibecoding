@@ -91,6 +91,15 @@ const serverSchema = z.object({
    * Unset means unauthenticated requests (subject to the lower anonymous limit).
    */
   GITHUB_TOKEN: z.string().min(1).optional(),
+  /**
+   * Server-only shared secret that authenticates the production job-trigger
+   * endpoint (Stage 10, `POST|GET /api/jobs/[job]`). An external scheduler
+   * (Vercel Cron, GitHub Actions, system cron) sends it as
+   * `Authorization: Bearer <CRON_SECRET>`. When UNSET the endpoint fails closed
+   * (rejects every request), so an unconfigured deployment can never be
+   * triggered anonymously. Never exposed to the browser or logged.
+   */
+  CRON_SECRET: z.string().min(1).optional(),
 });
 
 /**
@@ -179,6 +188,14 @@ export function requireDatabaseUrl(env: AppEnv = appEnv): string {
  */
 export function resolveGithubToken(env: AppEnv = appEnv): string | null {
   return env.GITHUB_TOKEN ?? null;
+}
+
+/**
+ * Resolve the optional server-only job-trigger secret (Stage 10). Returns null
+ * when unset, which makes the trigger endpoint fail closed. Never log the value.
+ */
+export function resolveCronSecret(env: AppEnv = appEnv): string | null {
+  return env.CRON_SECRET ?? null;
 }
 
 /** Admin auth configuration resolved from the environment. */

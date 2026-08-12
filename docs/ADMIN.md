@@ -249,7 +249,8 @@ Read-only operational visibility into automated job execution history.
 - Error summary (first ~100 chars, truncated)
 
 **No manual triggers:** Job runs page is read-only. Jobs are triggered via:
-- External scheduler (cron/Vercel Cron/GitHub Actions)
+- The authenticated production endpoint `POST|GET /api/jobs/[job]` (Stage 10), used by an external scheduler with `Authorization: Bearer <CRON_SECRET>`
+- External scheduler (Vercel Cron via `vercel.json`, GitHub Actions, or system cron)
 - CLI: `npm run jobs:ingest`, `jobs:enrich`, `jobs:cluster`, `jobs:rank`, `jobs:pipeline`
 
 **Status Semantics:**

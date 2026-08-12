@@ -18,39 +18,51 @@ architecture definitions.
 
 ## Current stage
 
-**Stage 9B — Developer Intelligence Source Expansion.**
+**Stage 10 — Production Hardening & Launch Readiness.**
 
-Adds two developer-intelligence inputs — **GitHub Releases** and **Hacker
-News** — as first-class Sources. They are new _inputs_, not new _pipelines_:
-both flow through the existing acquisition → NormalizedItem → canonicalization →
-Article/dedup → SourceFetch/health → enrichment → clustering → ranking → Stage 9A
-automation path unchanged.
+Stage 10 is not a feature stage. The product architecture and intelligence
+pipeline already exist through Stage 9B; Stage 10 inspects, tests, and hardens the
+existing system so it can be safely deployed — audit → fix → test → document.
 
-**Key capabilities:**
+**Key hardening:**
 
-- **Source-type acquisition seam** (`src/ingestion/acquire`) — one `SourceAcquirer`
-  per input; `ingestSource` dispatches on `source_type`; RSS/Atom behaviour is
-  unchanged.
-- **GitHub Releases** — official REST API, releases only, validated `owner`/`repo`
-  (fixed endpoint), bounded pagination, draft exclusion, explicit prerelease
-  policy, stable release id, canonical release URL, bounded excerpt, ETag
-  conditional requests, optional server-only `GITHUB_TOKEN`, 403/429 rate-limit
-  classification.
-- **Hacker News** — official Firebase API, story items only (comments/deleted/
-  dead/malformed excluded), bounded `top`/`best`/`new`/explicit ids, external
-  target URL or HN discussion URL. Engagement counts never affect ranking.
-- **Edited-release refresh** — a stable external id plus a provenance-safe
-  `createOrRefresh` updates an edited item's **source facts in place** (counted as
-  `itemsUpdated`), never duplicating and never touching editorial/AI/Story/ranking
-  state.
-- **Per-item failure observability** — Hacker News per-item fetch failures are
-  recorded distinctly from intentional skips: some failures → `PARTIAL`, all
-  requested items failing → `FAILED` (never a healthy `SUCCESS` with zero items).
-- **Per-source configuration** — a `source_config` JSONB column (migration `0018`)
-  with per-type validation and operator-friendly admin controls. Secrets stay
-  server-only (`GITHUB_TOKEN`), never stored in config.
+- **Baseline security headers** on every route via `next.config.mjs`
+  (`X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`,
+  `Permissions-Policy`, HSTS; `X-Powered-By` disabled). A strict CSP is documented
+  as deferred (needs Next.js nonces).
+- **Authenticated production job trigger** — `POST|GET /api/jobs/[job]` invokes the
+  **existing** Stage 9A orchestration (no new pipeline). `Authorization: Bearer
+<CRON_SECRET>`, constant-time checked, **fails closed** when unset. Bounded to
+  the allowlisted jobs; overlap protection stays the job runner's advisory lock.
+  Scheduled via `vercel.json` (Vercel Cron) or any external scheduler.
+- **Operator runbook** — how to tell whether jobs run, when the last pipeline
+  succeeded, which stage failed, which Sources are unhealthy, and whether failures
+  recur — all from existing `job_runs` / `SourceFetch` / Source-health surfaces
+  (`/admin/jobs`, `/admin/fetches`, `/admin/sources`).
+- **Backup & recovery procedure** — documented against the managed provider
+  (Supabase) plus the repository's idempotent migrations (documented, not yet
+  drill-verified).
+- **Public error boundary** — a branded fallback that leaks no internals.
+- **Documentation truth pass** — corrected stale "to be added / not implemented"
+  claims to match the actual `main` codebase.
+
+Invariants preserved: Article source facts, Article ≠ Story, editorial publishing
+boundary, advisory AI, deterministic ranking, conservative clustering, publication
+isolation, and server-only secrets are all unchanged.
 
 See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md) and [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+---
+
+### Previously: Stage 9B — Developer Intelligence Source Expansion
+
+Added **GitHub Releases** and **Hacker News** as first-class Sources flowing
+through the existing acquisition → NormalizedItem → Article/dedup →
+SourceFetch/health → enrichment → clustering → ranking → Stage 9A path (new
+inputs, not new pipelines): a source-type acquisition seam, per-source
+`source_config` (migration `0018`), provenance-safe edited-release refresh, and
+Hacker News per-item PARTIAL/FAILED observability. Engagement counts never affect
+ranking.
 
 ---
 
@@ -132,8 +144,10 @@ Key properties:
   states are never exposed publicly and publishing stays the PublicationStory
   boundary.
 
-Clustering is triggered **manually** by a mutating admin (no production
-scheduling). See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
+At Stage 7 clustering was triggered only manually by a mutating admin; Stage 9A
+later added the bounded clustering **job**, and Stage 10 the authenticated trigger
+endpoint, so it now also runs on the automated pipeline. The manual admin trigger
+remains. See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
 [`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) (Clustering Architecture), and
 [`docs/ADMIN.md`](docs/ADMIN.md).
 
@@ -172,8 +186,10 @@ Key properties:
 - **Optional** — with no provider configured, ingestion, admin, and public
   rendering behave exactly as before.
 
-Enrichment is triggered **manually** by a mutating admin from the Article detail
-page (no production scheduling). See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
+At Stage 6 enrichment was triggered only manually by a mutating admin from the
+Article detail page; Stage 9A added the bounded enrichment **job** and Stage 10 the
+authenticated trigger endpoint, so it now also runs on the automated pipeline. The
+manual admin trigger remains. See [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md),
 [`docs/ARCHITECTURE.MD`](docs/ARCHITECTURE.MD) (AI Architecture), and
 [`docs/ADMIN.md`](docs/ADMIN.md).
 
@@ -243,8 +259,10 @@ without moving to the appropriate roadmap stage:
   canonical Story/editorial fields
 - **automated AI translation** (Stage 5B localisation is manual/editorial +
   import only)
-- Story **ranking, trending**, recommendation, personalization (Stage 8+)
-- automated publishing; production clustering/polling **scheduling**
+- Story **recommendation / personalization** (ranking and trending themselves are
+  implemented in Stage 8)
+- **automated publishing** (publishing stays an explicit editorial action; the
+  automated pipeline enriches/clusters/ranks but never publishes)
 
 Public page rendering reads from PostgreSQL (the authoritative store) and does
 **not** depend on any live AI call. The `/admin` surface remains the only
