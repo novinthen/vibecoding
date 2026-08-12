@@ -58,8 +58,10 @@ Stage 10 adds the missing production glue and hardening around that pipeline.
    pipeline. `Authorization: Bearer <CRON_SECRET>`, constant-time checked, **fails
    closed** when the secret is unset. Bounded to the allowlisted jobs
    (`ingest`/`enrich`/`cluster`/`rank`/`pipeline`); overlap protection remains the
-   job runner's advisory lock. Scheduled via `vercel.json` (Vercel Cron) or any
-   external scheduler. Returns an operational summary only (no secrets/internals).
+   job runner's advisory lock. No automatic Vercel cron schedule is committed:
+   operators must first measure the selected job against the deployment runtime
+   budget, then schedule the authenticated endpoint from a compatible external
+   scheduler. Returns an operational summary only (no secrets/internals).
 
 3. **Operator monitoring runbook** (`docs/OPERATIONS.md`) — how to answer the
    launch-critical questions (jobs running? last pipeline success? which stage
@@ -77,7 +79,7 @@ Stage 10 adds the missing production glue and hardening around that pipeline.
 
 6. **Documentation truth pass** — corrected stale "to be added / not implemented /
    no production scheduling" claims across `README`, `OPERATIONS`, `ADMIN`, and
-   this file to match the actual `main` codebase.
+   this file to match the actual codebase.
 
 ## Deferred (not launch-blocking)
 
