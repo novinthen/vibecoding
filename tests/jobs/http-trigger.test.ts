@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveCronSecret } from '@/config/env';
 import type { AppEnv } from '@/config/env';
 import {
-  CRON_PIPELINE_OPTIONS,
   isAuthorizedTrigger,
   isTriggerableJob,
-  runTriggerableJob,
   triggerHttpStatus,
   TRIGGERABLE_JOBS,
 } from '@/jobs/http-trigger';
@@ -22,6 +20,11 @@ import { GET, POST } from '../../src/app/api/jobs/[job]/route';
  * route-level tests assert the fail-closed behaviour: with no CRON_SECRET
  * configured in the test environment, EVERY request is rejected with 401 before
  * any job runs or database access occurs.
+ *
+ * Scheduling/runtime policy is intentionally not encoded here: Stage 10 does not
+ * ship a checked-in Vercel cron schedule because the cumulative worst-case
+ * duration of network/provider work cannot be proven to fit a 60-second function
+ * budget. See docs/OPERATIONS.md.
  */
 
 describe('isAuthorizedTrigger', () => {
@@ -100,43 +103,6 @@ describe('triggerHttpStatus', () => {
 
   it('maps a genuine FAILED status to 500', () => {
     expect(triggerHttpStatus(outcome('FAILED', 'FAILED'))).toBe(500);
-  });
-});
-
-describe('runTriggerableJob — bounded cron pipeline', () => {
-  it('exposes conservative, bounded cron pipeline batches', () => {
-    expect(CRON_PIPELINE_OPTIONS.ingestion?.batchLimit).toBeLessThanOrEqual(10);
-    // Enrichment (network AI) is the slowest stage → smallest batch.
-    expect(CRON_PIPELINE_OPTIONS.enrichment?.batchLimit).toBeLessThanOrEqual(5);
-    expect(CRON_PIPELINE_OPTIONS.clustering?.batchLimit).toBeLessThanOrEqual(
-      50,
-    );
-    expect(CRON_PIPELINE_OPTIONS.ranking?.batchLimit).toBeLessThanOrEqual(50);
-    // Every stage is explicitly bounded (never left to Stage 9A's large defaults).
-    for (const stage of [
-      CRON_PIPELINE_OPTIONS.ingestion,
-      CRON_PIPELINE_OPTIONS.enrichment,
-      CRON_PIPELINE_OPTIONS.clustering,
-      CRON_PIPELINE_OPTIONS.ranking,
-    ]) {
-      expect(typeof stage?.batchLimit).toBe('number');
-    }
-  });
-
-  it('forwards the bounded cron options to the pipeline runner (not defaults)', async () => {
-    let received: unknown;
-    const fakeOutcome = {
-      kind: 'SUCCESS',
-      result: { status: 'SUCCEEDED' },
-    } as unknown as JobOutcome;
-    const spy = (_pool: unknown, options?: unknown): Promise<JobOutcome> => {
-      received = options;
-      return Promise.resolve(fakeOutcome);
-    };
-    await runTriggerableJob('pipeline', {} as never, {
-      pipeline: spy as never,
-    });
-    expect(received).toBe(CRON_PIPELINE_OPTIONS);
   });
 });
 
