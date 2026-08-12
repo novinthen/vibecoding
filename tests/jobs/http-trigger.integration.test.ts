@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 
-import { runTriggerableJob } from '@/jobs/http-trigger';
+import { runTriggerableJob, triggerHttpStatus } from '@/jobs/http-trigger';
 import { tryAcquireJobLock } from '@/jobs/locking';
 
 /**
@@ -52,6 +52,8 @@ describe.skipIf(skipIfNoDb)('job-trigger dispatch (DB-gated)', () => {
       const outcome = await runTriggerableJob('rank', pool);
       // Overlap prevented by Stage 9A advisory lock; recorded as SKIPPED.
       expect(outcome.result.status).toBe('SKIPPED');
+      // Expected overlap protection is a success-class HTTP response, NOT a 500.
+      expect(triggerHttpStatus(outcome)).toBe(200);
       const runs = await pool.query<{ status: string }>(
         "SELECT status FROM job_runs WHERE job_name = 'rank' ORDER BY started_at DESC",
       );

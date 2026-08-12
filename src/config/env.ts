@@ -190,12 +190,36 @@ export function resolveGithubToken(env: AppEnv = appEnv): string | null {
   return env.GITHUB_TOKEN ?? null;
 }
 
+/** Minimum CRON_SECRET length required in production (mirrors ADMIN_SESSION_SECRET). */
+export const MIN_PRODUCTION_CRON_SECRET_LENGTH = 32;
+
 /**
- * Resolve the optional server-only job-trigger secret (Stage 10). Returns null
- * when unset, which makes the trigger endpoint fail closed. Never log the value.
+ * Resolve the optional server-only job-trigger secret (Stage 10) at the config
+ * boundary. Never log the value.
+ *
+ *  - UNSET → `null`, so the trigger endpoint fails closed (rejects every request).
+ *  - Production + configured but shorter than
+ *    {@link MIN_PRODUCTION_CRON_SECRET_LENGTH} → throws a clear error: a weak
+ *    secret on a public production trigger is a misconfiguration and must fail
+ *    loudly rather than protect the endpoint with a guessable token. The endpoint
+ *    still never authorizes (resolution fails before any comparison).
+ *  - Otherwise (any length in local/preview/test, or ≥ 32 in production) → the
+ *    secret. Non-production stays flexible so tests can use short secrets.
+ *
+ * "Production" mirrors the admin secret rule: `NODE_ENV === 'production'`.
  */
 export function resolveCronSecret(env: AppEnv = appEnv): string | null {
-  return env.CRON_SECRET ?? null;
+  const secret = env.CRON_SECRET;
+  if (!secret) return null;
+  if (
+    env.NODE_ENV === 'production' &&
+    secret.length < MIN_PRODUCTION_CRON_SECRET_LENGTH
+  ) {
+    throw new Error(
+      `CRON_SECRET must be at least ${MIN_PRODUCTION_CRON_SECRET_LENGTH} characters in production.`,
+    );
+  }
+  return secret;
 }
 
 /** Admin auth configuration resolved from the environment. */

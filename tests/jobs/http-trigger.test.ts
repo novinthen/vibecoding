@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { resolveCronSecret } from '@/config/env';
+import type { AppEnv } from '@/config/env';
 import {
+  CRON_PIPELINE_OPTIONS,
   isAuthorizedTrigger,
   isTriggerableJob,
+  runTriggerableJob,
   triggerHttpStatus,
   TRIGGERABLE_JOBS,
 } from '@/jobs/http-trigger';
-import type { JobOutcome } from '@/jobs/types';
+import type { JobOutcome, JobResult, JobStatus } from '@/jobs/types';
 
 import { GET, POST } from '../../src/app/api/jobs/[job]/route';
 
@@ -76,21 +80,94 @@ describe('isTriggerableJob', () => {
 });
 
 describe('triggerHttpStatus', () => {
-  it('maps FAILED to 500 and everything else to 200', () => {
-    const base = { result: { status: 'SUCCEEDED' } } as unknown as JobOutcome;
-    expect(triggerHttpStatus({ ...base, kind: 'SUCCESS' } as JobOutcome)).toBe(
-      200,
+  // Build an outcome with a given terminal status and (independently) kind, so we
+  // can prove the mapping keys off result.status and NOT kind.
+  function outcome(status: JobStatus, kind: JobOutcome['kind']): JobOutcome {
+    const result = { status } as unknown as JobResult;
+    if (kind === 'FAILED') return { kind, result, reason: 'x' };
+    return { kind, result } as JobOutcome;
+  }
+
+  it('maps SUCCEEDED and PARTIAL to 200', () => {
+    expect(triggerHttpStatus(outcome('SUCCEEDED', 'SUCCESS'))).toBe(200);
+    expect(triggerHttpStatus(outcome('PARTIAL', 'PARTIAL'))).toBe(200);
+  });
+
+  it('maps a lock-held SKIPPED (kind FAILED, status SKIPPED) to 200, not 500', () => {
+    // This is exactly what runJob returns on advisory-lock contention.
+    expect(triggerHttpStatus(outcome('SKIPPED', 'FAILED'))).toBe(200);
+  });
+
+  it('maps a genuine FAILED status to 500', () => {
+    expect(triggerHttpStatus(outcome('FAILED', 'FAILED'))).toBe(500);
+  });
+});
+
+describe('runTriggerableJob — bounded cron pipeline', () => {
+  it('exposes conservative, bounded cron pipeline batches', () => {
+    expect(CRON_PIPELINE_OPTIONS.ingestion?.batchLimit).toBeLessThanOrEqual(10);
+    // Enrichment (network AI) is the slowest stage → smallest batch.
+    expect(CRON_PIPELINE_OPTIONS.enrichment?.batchLimit).toBeLessThanOrEqual(5);
+    expect(CRON_PIPELINE_OPTIONS.clustering?.batchLimit).toBeLessThanOrEqual(
+      50,
     );
-    expect(triggerHttpStatus({ ...base, kind: 'PARTIAL' } as JobOutcome)).toBe(
-      200,
-    );
-    expect(
-      triggerHttpStatus({
-        ...base,
-        kind: 'FAILED',
-        reason: 'x',
-      } as JobOutcome),
-    ).toBe(500);
+    expect(CRON_PIPELINE_OPTIONS.ranking?.batchLimit).toBeLessThanOrEqual(50);
+    // Every stage is explicitly bounded (never left to Stage 9A's large defaults).
+    for (const stage of [
+      CRON_PIPELINE_OPTIONS.ingestion,
+      CRON_PIPELINE_OPTIONS.enrichment,
+      CRON_PIPELINE_OPTIONS.clustering,
+      CRON_PIPELINE_OPTIONS.ranking,
+    ]) {
+      expect(typeof stage?.batchLimit).toBe('number');
+    }
+  });
+
+  it('forwards the bounded cron options to the pipeline runner (not defaults)', async () => {
+    let received: unknown;
+    const fakeOutcome = {
+      kind: 'SUCCESS',
+      result: { status: 'SUCCEEDED' },
+    } as unknown as JobOutcome;
+    const spy = (_pool: unknown, options?: unknown): Promise<JobOutcome> => {
+      received = options;
+      return Promise.resolve(fakeOutcome);
+    };
+    await runTriggerableJob('pipeline', {} as never, {
+      pipeline: spy as never,
+    });
+    expect(received).toBe(CRON_PIPELINE_OPTIONS);
+  });
+});
+
+describe('resolveCronSecret — production strength', () => {
+  function envWith(overrides: Partial<AppEnv>): AppEnv {
+    return {
+      NODE_ENV: 'test',
+      APP_ENV: 'local',
+      NEXT_PUBLIC_APP_NAME: 'Test',
+      ...overrides,
+    } as AppEnv;
+  }
+
+  it('returns null when unset (fails closed)', () => {
+    expect(resolveCronSecret(envWith({ CRON_SECRET: undefined }))).toBeNull();
+  });
+
+  it('allows a short secret outside production (test flexibility)', () => {
+    const env = envWith({ NODE_ENV: 'test', CRON_SECRET: 'short' });
+    expect(resolveCronSecret(env)).toBe('short');
+  });
+
+  it('rejects a short secret in production', () => {
+    const env = envWith({ NODE_ENV: 'production', CRON_SECRET: 'too-short' });
+    expect(() => resolveCronSecret(env)).toThrow(/at least 32 characters/i);
+  });
+
+  it('accepts a 32+ char secret in production', () => {
+    const strong = 'x'.repeat(32);
+    const env = envWith({ NODE_ENV: 'production', CRON_SECRET: strong });
+    expect(resolveCronSecret(env)).toBe(strong);
   });
 });
 

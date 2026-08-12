@@ -143,24 +143,49 @@ remains the job runner's advisory-lock responsibility.
   other path segment returns 404).
 - **Auth**: `Authorization: Bearer <CRON_SECRET>`, checked in constant time. When
   `CRON_SECRET` is **unset the endpoint fails closed** — every request is 401 —
-  so an unconfigured deployment can never be triggered anonymously. Set a long,
-  high-entropy `CRON_SECRET` (server-only; never exposed or logged).
+  so an unconfigured deployment can never be triggered anonymously. In
+  **production a configured `CRON_SECRET` must be at least 32 characters**
+  (enforced in `src/config/env.ts`, mirroring `ADMIN_SESSION_SECRET`); a shorter
+  one fails resolution loudly rather than guarding a public trigger with a weak
+  token. Server-only; never exposed or logged.
 - **Response**: JSON operational summary (`kind`, `status`, counts, `durationMs`).
-  `SUCCESS`/`PARTIAL` → HTTP 200; `FAILED` → HTTP 500. A lock-contended run is
-  recorded as `SKIPPED` (still HTTP 200) exactly as the CLI reports it.
+  The HTTP status is derived from the job's terminal `status`:
+  `SUCCEEDED`/`PARTIAL` → 200; **`SKIPPED` (overlap prevented by the advisory
+  lock) → 200** — expected behaviour, never a server error; genuine `FAILED` → 500.
 - **Runtime**: Node.js runtime, `dynamic = 'force-dynamic'`, `maxDuration = 60`.
+- **Bounded pipeline batches (cron-safe).** A triggered `pipeline` runs with
+  deliberately small explicit batches so it completes within the route's 60s
+  budget instead of Stage 9A's large defaults — enrichment (sequential network AI)
+  is the slowest stage and is the smallest:
+
+  | stage | cron batch (`CRON_PIPELINE_OPTIONS`) | Stage 9A default |
+  | --- | --- | --- |
+  | ingestion | 5 | 50 |
+  | enrichment | 3 | 100 |
+  | clustering | 25 | 50 |
+  | ranking | 25 | 100 |
+
+  The pipeline is idempotent and re-runs every tick, so bounding per-run
+  throughput never loses work — it spreads it across ticks. For higher throughput
+  than the coordinated pipeline provides, schedule the **individual** stage
+  endpoints on their own cadences (each stage job keeps its own Stage 9A defaults
+  and its own duration profile), or raise `maxDuration` **only** if the hosting
+  plan is proven to support a longer function execution budget.
 
 Production scheduling options:
 
 1. **Vercel Cron** (simplest for Vercel hosting):
-   - `vercel.json` already schedules `/api/jobs/pipeline`
-     (`7,22,37,52 * * * *`, i.e. every 15 min off the :00 mark). Tune the cadence
-     to your Vercel plan's cron limits (Hobby is limited; Pro allows minute-level).
+   - `vercel.json` schedules the bounded `/api/jobs/pipeline`
+     (`7,22,37,52 * * * *`, i.e. every 15 min off the :00 mark). The bounded
+     batches above are sized for that cadence and the 60s budget. Tune to your
+     Vercel plan's cron limits (Hobby is limited; Pro allows minute-level).
    - Vercel Cron issues **GET** and automatically attaches
      `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set in the
      project — no extra wiring needed.
    - To run stages on separate cadences instead of the coordinated pipeline, add
-     `/api/jobs/ingest`, `/api/jobs/enrich`, etc. entries.
+     `/api/jobs/ingest`, `/api/jobs/enrich`, etc. entries. Individual stage
+     endpoints are NOT bounded by `CRON_PIPELINE_OPTIONS`; size their cadence to
+     their own runtime, and confirm each stays within `maxDuration`.
 
 2. **GitHub Actions** (repository-based):
    - A scheduled workflow `curl -X POST -H "Authorization: Bearer $CRON_SECRET"
@@ -240,7 +265,7 @@ Jobs use existing config plus the Stage 10 trigger secret:
 - `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL` — optional (enrichment uses fake provider if unset)
 - `EMBEDDING_PROVIDER` — optional (clustering uses fake provider by default)
 - `GITHUB_TOKEN` — optional server-only token raising the GitHub API rate limit for Release ingestion (Stage 9B); never stored in `source_config` or logged
-- `CRON_SECRET` — required to use the production job-trigger endpoint (Stage 10). Unset ⇒ the endpoint fails closed (401). Server-only; never exposed or logged
+- `CRON_SECRET` — required to use the production job-trigger endpoint (Stage 10). Unset ⇒ the endpoint fails closed (401); in production it must be **≥ 32 characters** (a shorter value fails resolution loudly). Server-only; never exposed or logged
 
 ### Job-Specific Options
 
