@@ -131,7 +131,7 @@ Expected work:
 
 ## Stage 5 — Public Portal
 
-**Status:** CURRENT
+**Status:** COMPLETE
 
 Goal:
 
@@ -281,25 +281,35 @@ Tool profiles, Release Watch, domain-specific GitHub Trending.
 
 ---
 
-## Stage 10 — Production Hardening & Launch
+## Stage 10 — Production Hardening & Launch (COMPLETE, pending review)
 
-Goal:
+Goal: make the existing system safer to launch (audit → fix → test → document) —
+not bigger.
 
-Make the system production-ready.
+Delivered:
 
-Expected work:
+- production readiness audit (security / reliability / performance / AI-cost /
+  public-launch / operations), no BLOCKERs found;
+- baseline security response headers on every route (`next.config.mjs`);
+- authenticated, bounded, fail-closed production job trigger
+  (`POST|GET /api/jobs/[job]`) reusing the Stage 9A orchestration; no automatic
+  Vercel cron schedule is committed because the real job runtime must first be
+  measured against the deployment execution budget;
+- operator monitoring runbook over existing `job_runs` / `SourceFetch` / Source
+  health;
+- backup & recovery procedure (managed provider + idempotent migrations;
+  documented, not drill-verified);
+- public error boundary; documentation truth pass;
+- tests for the new security boundaries + Postgres CI regression gate.
 
-- security audit;
-- performance;
-- rate limits;
-- retries;
-- monitoring;
-- AI cost controls;
-- backup/recovery;
-- SEO review;
-- copyright/attribution review;
-- analytics;
-- launch QA.
+Verified already-present hardening (no change needed): SSRF guard, host-header /
+canonical-URL poisoning protection, multi-publication isolation, admin auth
+(HMAC session + roster reconciliation), bounded AI (30s timeout, 8k-char input),
+bounded/paginated queries, outbound-link safety, and source attribution.
+
+Deferred (not launch-blocking): strict CSP (needs Next.js nonces), admin
+login rate-limiting (needs a shared store), external error reporting, and a real
+restore drill.
 
 ---
 

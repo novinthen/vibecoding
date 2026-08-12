@@ -91,6 +91,15 @@ const serverSchema = z.object({
    * Unset means unauthenticated requests (subject to the lower anonymous limit).
    */
   GITHUB_TOKEN: z.string().min(1).optional(),
+  /**
+   * Server-only shared secret that authenticates the production job-trigger
+   * endpoint (Stage 10, `POST|GET /api/jobs/[job]`). An external scheduler
+   * (Vercel Cron, GitHub Actions, system cron) sends it as
+   * `Authorization: Bearer <CRON_SECRET>`. When UNSET the endpoint fails closed
+   * (rejects every request), so an unconfigured deployment can never be
+   * triggered anonymously. Never exposed to the browser or logged.
+   */
+  CRON_SECRET: z.string().min(1).optional(),
 });
 
 /**
@@ -179,6 +188,38 @@ export function requireDatabaseUrl(env: AppEnv = appEnv): string {
  */
 export function resolveGithubToken(env: AppEnv = appEnv): string | null {
   return env.GITHUB_TOKEN ?? null;
+}
+
+/** Minimum CRON_SECRET length required in production (mirrors ADMIN_SESSION_SECRET). */
+export const MIN_PRODUCTION_CRON_SECRET_LENGTH = 32;
+
+/**
+ * Resolve the optional server-only job-trigger secret (Stage 10) at the config
+ * boundary. Never log the value.
+ *
+ *  - UNSET → `null`, so the trigger endpoint fails closed (rejects every request).
+ *  - Production + configured but shorter than
+ *    {@link MIN_PRODUCTION_CRON_SECRET_LENGTH} → throws a clear error: a weak
+ *    secret on a public production trigger is a misconfiguration and must fail
+ *    loudly rather than protect the endpoint with a guessable token. The endpoint
+ *    still never authorizes (resolution fails before any comparison).
+ *  - Otherwise (any length in local/preview/test, or ≥ 32 in production) → the
+ *    secret. Non-production stays flexible so tests can use short secrets.
+ *
+ * "Production" mirrors the admin secret rule: `NODE_ENV === 'production'`.
+ */
+export function resolveCronSecret(env: AppEnv = appEnv): string | null {
+  const secret = env.CRON_SECRET;
+  if (!secret) return null;
+  if (
+    env.NODE_ENV === 'production' &&
+    secret.length < MIN_PRODUCTION_CRON_SECRET_LENGTH
+  ) {
+    throw new Error(
+      `CRON_SECRET must be at least ${MIN_PRODUCTION_CRON_SECRET_LENGTH} characters in production.`,
+    );
+  }
+  return secret;
 }
 
 /** Admin auth configuration resolved from the environment. */

@@ -1,118 +1,114 @@
 # Current Stage
 
-# Stage 9B — Developer Intelligence Source Expansion
+# Stage 10 — Production Hardening & Launch Readiness
 
 ## Status
 
-**COMPLETE**
+**COMPLETE (pending review)**
 
-Stages 3–9A are complete. Stage 9B expands acquisition to two new
-developer-intelligence inputs — **GitHub Releases** and **Hacker News** — without
-building any new pipelines.
+Stages 3–9B are complete and merged to `main`. Stage 10 is **not** a feature
+stage: it inspects, tests, and hardens the existing system so it can be safely
+deployed. Method: **audit → fix → test → document**, with small corrections to
+existing code only — no new architecture, no product expansion.
 
-Do not begin Stage 10 without explicit approval.
+Do not begin Stage 11.
 
 ---
 
 # Goal
 
-Add GitHub Releases and Hacker News as first-class Sources that flow through the
-**existing** ingestion engine. They are new *inputs*, not new *pipelines*:
+Make the existing product safer to launch without making it bigger. The pipeline
+already exists end to end:
 
 ```
-source-specific acquisition (RSS/Atom | GitHub Releases | Hacker News)
-  → existing NormalizedItem
-  → existing canonicalization + hashing
-  → existing Article persistence / exact dedup
-  → existing SourceFetch audit + Source health
-  → existing enrichment
-  → existing clustering
-  → existing ranking
-  → existing Stage 9A automation
+source acquisition → normalization → Article persistence/dedup → AI enrichment
+  → Story clustering → publication/localisation → ranking → production automation
+  → public portal
 ```
 
-## Core invariants
+Stage 10 adds the missing production glue and hardening around that pipeline.
 
-1. **One pipeline.** No separate GitHub/HN Article pipeline. Dispatch happens at
-   acquisition; everything downstream is format-agnostic and shared.
-2. **No auto-publishing.** Acquisition never publishes; PublicationStory remains
-   the publishing boundary.
-3. **Source facts only.** Acquirers write Article source facts (title, url,
-   excerpt, author, timestamps) — never AI-derived data, never engagement.
-4. **Reuse the safe fetcher.** Every provider fetches through the Stage 3 safe
-   fetcher, so SSRF, redirect bounds, timeout, and size caps apply identically.
-5. **Secrets stay server-only.** Provider credentials live in the environment
-   (`GITHUB_TOKEN`), never in `source_config`, never logged.
+## Preserved invariants (unchanged by Stage 10)
+
+- Article source facts are never overwritten by AI/clustering/ranking (Stage 9B's
+  stable-external-id source-fact refresh remains the only in-place update).
+- Article ≠ Story.
+- Publishing stays editorial — nothing auto-publishes.
+- AI stays advisory — never promoted into canonical/editorial fields.
+- Ranking stays deterministic (Stage 8 weights/semantics unchanged).
+- Clustering stays conservative (REVIEWED/LOCKED protection intact).
+- Publication isolation — no Story presentation, localisation, ranking, canonical
+  URL, or domain config leaks across Publications.
+- Secrets stay server-only (`DATABASE_URL`, `AI_API_KEY`, `GITHUB_TOKEN`,
+  `ADMIN_SESSION_SECRET`, `CRON_SECRET`).
 
 ---
 
 # Implemented
 
-1. **Source configuration** — `source_config` JSONB column (migration `0018`),
-   per-type Zod validation (`src/ingestion/source-config.ts`), repository
-   persistence (create/upsert/update), and admin plumbing (validation, service,
-   audit view, and an "Adapter config (JSON)" form field).
+1. **Baseline security headers** (`next.config.mjs`) — applied to every route:
+   `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
+   strict-origin-when-cross-origin`, `Permissions-Policy`, and HSTS; `X-Powered-By`
+   remains disabled. A strict `Content-Security-Policy` is **deferred** (needs
+   per-request Next.js nonces) and documented as future hardening.
 
-2. **Acquisition/dispatch seam** (`src/ingestion/acquire`) — `SourceAcquirer`
-   contract producing a canonical `AcquisitionResult`; `ingestSource` dispatches
-   on `source_type`. The RSS/Atom path is factored into `feedAcquirer` with
-   identical behaviour and remains the default for RSS/ATOM/RSSHUB/API/MANUAL.
+2. **Authenticated production job trigger** — `POST|GET /api/jobs/[job]`
+   (`src/app/api/jobs/[job]/route.ts` + `src/jobs/http-trigger.ts`). Invokes the
+   **existing** Stage 9A orchestration (`runJob` / `runPipelineWithLock`); no new
+   pipeline. `Authorization: Bearer <CRON_SECRET>`, constant-time checked, **fails
+   closed** when the secret is unset. Bounded to the allowlisted jobs
+   (`ingest`/`enrich`/`cluster`/`rank`/`pipeline`); overlap protection remains the
+   job runner's advisory lock. No automatic Vercel cron schedule is committed:
+   operators must first measure the selected job against the deployment runtime
+   budget, then schedule the authenticated endpoint from a compatible external
+   scheduler. Returns an operational summary only (no secrets/internals).
 
-3. **GitHub Releases acquirer** (`github-acquirer.ts`) — official REST API,
-   releases only; validated `owner`/`repo` build the fixed
-   `api.github.com/repos/{owner}/{repo}/releases` endpoint; bounded pagination;
-   draft exclusion; explicit prerelease policy (`exclude`/`include`/`only`);
-   stable `github:release:{id}` external id (edited releases never duplicate);
-   `html_url` canonical target; bounded release-note excerpt; ETag conditional
-   requests; optional server-only Bearer token; 403/429 rate-limit
-   classification.
+3. **Operator monitoring runbook** (`docs/OPERATIONS.md`) — how to answer the
+   launch-critical questions (jobs running? last pipeline success? which stage
+   failed? which Sources unhealthy? recurring failures?) using existing
+   `job_runs` / `SourceFetch` / Source-health data and the `/admin/jobs`,
+   `/admin/fetches`, `/admin/sources` surfaces. No new observability platform.
 
-4. **Hacker News acquirer** (`hacker-news-acquirer.ts`) — official Firebase API,
-   story items only; excludes comments, deleted/dead, and malformed items;
-   bounded `top`/`best`/`new`/explicit ids; external target URL where present or
-   the HN discussion URL for text-only Ask HN; stable `hn:item:{id}` external id.
-   Score/comment counts are NOT captured onto the Article and never affect
-   Stage 8 ranking.
+4. **Backup & recovery procedure** (`docs/OPERATIONS.md`) — documented against the
+   managed provider (Supabase) plus the repository's idempotent migrations
+   (restore → `db:migrate` → `db:seed` → `db:validate`), with required secrets and
+   post-restore validation. Documented, **not** drill-verified.
 
-5. **Safe-fetcher hardening** — optional extra request headers (JSON `Accept`,
-   API version, `Authorization`); the `Authorization` header is dropped before a
-   cross-origin redirect so a provider token cannot leak; a small allow-listed
-   set of rate-limit response headers is attached to 4xx/5xx errors for
-   provider-specific classification. RSS/Atom behaviour is unchanged.
+5. **Public error boundary** (`src/app/(public)/error.tsx`) — a branded fallback
+   that shows no internal detail.
 
-6. **Registry** — one representative GitHub Source (`nextjs-releases`) and one
-   Hacker News Source (`hacker-news-top`), gated (not auto-enabled).
+6. **Documentation truth pass** — corrected stale "to be added / not implemented /
+   no production scheduling" claims across `README`, `OPERATIONS`, `ADMIN`, and
+   this file to match the actual codebase.
 
-7. **Tests** — deterministic fixture/unit tests for the GitHub and HN acquirers,
-   the fetcher's header/redirect/rate-limit behaviour, an in-memory dispatch
-   test proving GitHub/HN flow through `ingestSource` with dedup and
-   stable-id-on-edit, and a DB-gated mixed-source integration test (RSS + GitHub
-   + HN through one engine, no duplicates, SourceFetch rows present, no
-   auto-publish). No required test performs a live GitHub/HN call.
+## Deferred (not launch-blocking)
+
+- Strict Content-Security-Policy (needs Next.js nonce integration).
+- Admin login rate-limiting (needs a shared store; roster is env-configured,
+  scrypt-hashed, and not publicly advertised).
+- External error reporting (Sentry/OTel) — add later only if a concrete need
+  arises.
+- A real restore drill to move recovery from "documented" to "verified".
 
 ---
 
 # Exit Criteria
 
-Stage 9B is complete when:
-
-- ✅ `source_config` migration + per-type validation + repository/admin plumbing
-- ✅ acquisition/dispatch seam; RSS/Atom path preserved unchanged
-- ✅ GitHub Releases acquirer meeting all requirements (bounded, draft/prerelease
-  policy, stable id, canonical URL, bounded excerpt, ETag, rate-limit, token)
-- ✅ Hacker News acquirer (story-only, exclusions, url selection, bounded)
-- ✅ no separate GitHub/HN pipeline; downstream stages untouched
-- ✅ no auto-publishing; no Stage 8 ranking change from HN engagement
-- ✅ SSRF/security model preserved; token never leaked or logged
-- ✅ deterministic GitHub + HN tests (no live calls in CI)
-- ✅ mixed-source PostgreSQL integration test
+- ✅ production readiness audit completed and findings classified
+- ✅ justified BLOCKER/HIGH/MEDIUM fixes implemented (no BLOCKERs found)
+- ✅ authenticated, bounded, fail-closed production job trigger reusing Stage 9A
+- ✅ security response headers on every route
+- ✅ monitoring + backup/recovery runbooks documented
+- ✅ documentation matches the actual codebase
+- ✅ tests for the new security boundaries (trigger auth/allowlist, headers,
+  DB-gated dispatch + lock)
 - ✅ typecheck, lint, format check pass
 - ✅ production build succeeds
-- ✅ documentation updated (ARCHITECTURE, DATA_MODEL, ROADMAP, ADMIN, this file)
+- ✅ full DB-enabled suite green on Postgres 16 + pgvector CI
 
 ---
 
 # HARD STOP
 
-Do not begin Stage 10 without explicit approval. Do not merge to `main` without
-review.
+Do not begin Stage 11. Stage 10 is pushed to its branch for review and is **not**
+merged to `main` here.
